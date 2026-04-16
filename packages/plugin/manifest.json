@@ -1,0 +1,11 @@
+{
+    "id": "obsidian-collaborative-plugin",
+    "name": "Obsidian Collaborative Cloud",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "Real-time collaboration and E2E encrypted sync for Obsidian.",
+    "author": "Obsidian Collaborative Team",
+    "authorUrl": "",
+    "fundingUrl": "",
+    "isDesktopOnly": false
+}
