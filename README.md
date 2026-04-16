@@ -2,6 +2,40 @@
 
 This monorepo contains the source code for the Obsidian Collaborative Plugin ecosystem, including the Obsidian plugin itself, the backend server, and the admin dashboard.
 
+```mermaid
+graph TD
+    subgraph "Client Side"
+        P[Obsidian Plugin]
+        S[Shared Types]
+    end
+    
+    subgraph "Backend Infrastructure"
+        B[Node.js Server]
+        DB[(PostgreSQL)]
+    end
+    
+    subgraph "Management"
+        A[Admin Dashboard]
+    end
+    
+    P <-->|WebSockets / Yjs| B
+    B <--> DB
+    A <-->|REST API| B
+    P -.->|Uses| S
+    B -.->|Uses| S
+    A -.->|Uses| S
+```
+
+## What it does
+The Obsidian Collaborative Plugin transforms Obsidian into a multi-user collaborative environment. It enables real-time synchronization of notes across different users and devices while maintaining privacy through end-to-end encryption. The ecosystem includes a high-performance backend server for data orchestration and an administrative interface for system management.
+
+## Key Features
+- **🔒 End-to-End Encryption**: Secure your notes with client-side encryption. Only you and your collaborators hold the keys.
+- **⚡ Real-time Sync**: Experience seamless multi-user editing powered by Yjs and WebSockets.
+- **🛠️ Self-Hosted Freedom**: Full control over your data with an easily deployable Node.js backend and PostgreSQL database.
+- **🖥️ Admin Control**: Dedicated dashboard to manage users, monitor system health, and oversee the ecosystem.
+- **📦 Monorepo Architecture**: Clean, type-safe development using shared logic across the plugin, server, and dashboard.
+
 ## Project Structure
 
 - **packages/plugin**: The Obsidian plugin (client-side).
@@ -82,9 +116,3 @@ npm run test
 npm run dev --workspace=@obsidian-collaborative/admin
 ```
 The dashboard runs on `http://localhost:3000`.
-
-## Features
-
-- **Real-time Collaboration**: Edit notes simultaneously with others using Yjs and WebSockets.
-- **E2E Encryption**: All files are encrypted on the client-side before syncing.
-- **Admin Dashboard**: Manage users and view system stats.
