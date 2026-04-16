@@ -9,13 +9,16 @@ export class AuthService {
         this.plugin = plugin;
     }
 
-    async login(email: string, password: string): Promise<User | null> {
+    async login(email: string, password: string, mfaCode?: string): Promise<User | null> {
         try {
+            const bodyData: any = { email, password };
+            if (mfaCode) bodyData.mfa_code = mfaCode;
+
             const response = await request({
                 url: `${this.plugin.settings.apiUrl}/api/auth/login`,
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify(bodyData),
             });
 
             const data = JSON.parse(response);
@@ -28,8 +31,12 @@ export class AuthService {
             }
             return null;
 
-        } catch (error) {
+        } catch (error: any) {
             console.error('Login failed:', error);
+            // Check if error contains mfa_required
+            if (error.status === 401 && error.message?.includes('mfa_required')) {
+                throw new Error('mfa_required');
+            }
             throw error;
         }
     }
@@ -82,6 +89,34 @@ export class AuthService {
         } catch (error) {
             console.error('Failed to fetch current user', error);
             return null;
+        }
+    }
+
+    async setupMFA(): Promise<{ qrCodeDataUrl: string, secret: string }> {
+        const response = await request({
+            url: `${this.plugin.settings.apiUrl}/api/auth/mfa/setup`,
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${this.plugin.settings.token}`
+            }
+        });
+        return JSON.parse(response);
+    }
+
+    async verifyMFA(code: string): Promise<boolean> {
+        try {
+            await request({
+                url: `${this.plugin.settings.apiUrl}/api/auth/mfa/verify`,
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.plugin.settings.token}`
+                },
+                body: JSON.stringify({ code })
+            });
+            return true;
+        } catch (e) {
+            return false;
         }
     }
 }

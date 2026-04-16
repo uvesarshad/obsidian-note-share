@@ -7,6 +7,7 @@ import { EncryptionService } from './encryption';
 import { BackupService } from './backup';
 import { SharePermissionType, SharingService } from './sharing';
 import { SharedNotesView, VIEW_TYPE_SHARED_NOTES } from './views/SharedNotesView';
+import { VersionHistoryView, VIEW_TYPE_VERSION_HISTORY } from './views/VersionHistoryView';
 import { EncryptionPassphraseModal } from './EncryptionPassphraseModal';
 
 const DEFAULT_SETTINGS: CollaborativeSettings = {
@@ -56,15 +57,24 @@ export default class CollaborativePlugin extends Plugin {
         this.shareStatusEl = this.addStatusBarItem();
         this.shareStatusEl.setText('Share: sign in');
 
-        // Register View
         this.registerView(
             VIEW_TYPE_SHARED_NOTES,
             (leaf) => new SharedNotesView(leaf, this)
         );
 
-        // Add Ribbon Icon
+        this.registerView(
+            VIEW_TYPE_VERSION_HISTORY,
+            (leaf) => new VersionHistoryView(leaf, this)
+        );
+
+        // Add Ribbon Icon for Shared Notes
         this.addRibbonIcon('users', 'Shared Notes', () => {
-            this.activateView();
+            this.activateSharedNotesView();
+        });
+
+        // Add Ribbon Icon for Version History
+        this.addRibbonIcon('history', 'Version History', () => {
+            this.activateVersionHistoryView();
         });
 
         // This adds a settings tab so the user can configure various aspects of the plugin
@@ -87,7 +97,15 @@ export default class CollaborativePlugin extends Plugin {
             id: 'open-shared-notes',
             name: 'Open Shared Notes',
             callback: () => {
-                this.activateView();
+                this.activateSharedNotesView();
+            }
+        });
+
+        this.addCommand({
+            id: 'open-version-history',
+            name: 'Open Version History',
+            callback: () => {
+                this.activateVersionHistoryView();
             }
         });
 
@@ -100,6 +118,13 @@ export default class CollaborativePlugin extends Plugin {
                 await this.collaborationManager.joinDocument(file);
             }
             await this.updateShareStatusIndicator(file?.path);
+            
+            // Update version history view
+            const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_VERSION_HISTORY);
+            if (leaves.length > 0) {
+                const view = leaves[0].view as VersionHistoryView;
+                await view.setFile(file);
+            }
         }));
 
         if (this.settings.token) {
@@ -404,7 +429,7 @@ export default class CollaborativePlugin extends Plugin {
         return this.settings.encryptionVerifier;
     }
 
-    async activateView() {
+    async activateSharedNotesView() {
         const { workspace } = this.app;
 
         let leaf: WorkspaceLeaf | null = null;
@@ -420,6 +445,28 @@ export default class CollaborativePlugin extends Plugin {
         }
 
         if (leaf) workspace.revealLeaf(leaf);
+    }
+
+    async activateVersionHistoryView() {
+        const { workspace } = this.app;
+
+        let leaf: WorkspaceLeaf | null = null;
+        const leaves = workspace.getLeavesOfType(VIEW_TYPE_VERSION_HISTORY);
+
+        if (leaves.length > 0) {
+            leaf = leaves[0];
+        } else {
+            leaf = workspace.getRightLeaf(false);
+            if (leaf) {
+                await leaf.setViewState({ type: VIEW_TYPE_VERSION_HISTORY, active: true });
+            }
+        }
+
+        if (leaf) {
+            workspace.revealLeaf(leaf);
+            const view = leaf.view as VersionHistoryView;
+            await view.setFile(this.app.workspace.getActiveFile());
+        }
     }
 
     onunload() {

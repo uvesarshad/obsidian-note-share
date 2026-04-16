@@ -1,3 +1,5 @@
+import * as bip39 from 'bip39';
+
 export class EncryptionService {
     private key: CryptoKey | null = null;
     private salt: Uint8Array | null = null;
@@ -42,6 +44,10 @@ export class EncryptionService {
             : window.crypto.getRandomValues(new Uint8Array(16));
         await this.deriveKey(password, salt);
         return this.arrayBufferToBase64(salt.buffer);
+    }
+
+    generateRecoveryPhrase(): string {
+        return bip39.generateMnemonic();
     }
 
     async encrypt(text: string): Promise<{ iv: string, data: string }> {

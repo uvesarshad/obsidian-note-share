@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS users (
   last_login TIMESTAMP WITH TIME ZONE,
   mfa_enabled BOOLEAN DEFAULT FALSE,
   mfa_secret VARCHAR(255),
-  role VARCHAR(50) DEFAULT 'user'
+  role VARCHAR(50) DEFAULT 'user',
+  email_verified BOOLEAN DEFAULT FALSE,
+  verification_token VARCHAR(255),
+  reset_token VARCHAR(255),
+  reset_token_expires TIMESTAMP WITH TIME ZONE
 );
 
 -- Vaults Table

@@ -224,6 +224,29 @@ export class CollaborativeSettingsTab extends PluginSettingTab {
                             await this.plugin.updateShareStatusIndicator(this.plugin.app.workspace.getActiveFile()?.path);
                             this.display(); // Refresh UI
                         }));
+
+                new Setting(containerEl)
+                    .setName('Multi-Factor Authentication (MFA)')
+                    .setDesc('Secure your account with an Authenticator App.')
+                    .addButton(button => button
+                        .setButtonText('Setup MFA')
+                        .onClick(async () => {
+                            try {
+                                const mfaInfo = await this.authService.setupMFA();
+                                const code = window.prompt(`MFA Secret: ${mfaInfo.secret}\n\nEnter this secret in your authenticator app, then enter the generated 6-digit code below to verify:`);
+                                if (!code) return;
+                                
+                                const success = await this.authService.verifyMFA(code);
+                                if (success) {
+                                    new Notice('MFA successfully enabled!');
+                                } else {
+                                    new Notice('Invalid MFA Code. Setup failed.');
+                                }
+                            } catch (error) {
+                                console.error('Failed to setup MFA', error);
+                                new Notice('Failed to start MFA setup.');
+                            }
+                        }));
             }
         } else {
             containerEl.createEl('h3', { text: this.isRegisterMode ? 'Register' : 'Login' });
@@ -262,7 +285,17 @@ export class CollaborativeSettingsTab extends PluginSettingTab {
                             if (this.isRegisterMode) {
                                 await this.authService.register(email, password, displayName);
                             } else {
-                                await this.authService.login(email, password);
+                                try {
+                                    await this.authService.login(email, password);
+                                } catch (err: any) {
+                                    if (err.message === 'mfa_required') {
+                                        const code = window.prompt('Enter your Multi-Factor Authentication code:');
+                                        if (!code) throw new Error('MFA code is required to login');
+                                        await this.authService.login(email, password, code);
+                                    } else {
+                                        throw err;
+                                    }
+                                }
                             }
                             this.plugin.lockEncryption();
                             await this.syncBackupPreferencesFromServer();

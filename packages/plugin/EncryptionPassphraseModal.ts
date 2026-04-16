@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting } from 'obsidian';
+import * as bip39 from 'bip39';
 
 type EncryptionModalMode = 'setup' | 'unlock';
 
@@ -40,6 +41,28 @@ export class EncryptionPassphraseModal extends Modal {
         }
 
         let passphraseInput: HTMLInputElement | null = null;
+        let confirmInput: HTMLInputElement | null = null;
+
+        if (isSetup) {
+            new Setting(contentEl)
+                .setName('Use a Recovery Phrase')
+                .setDesc('Generate a secure 12-word mnemonic phrase instead of a password.')
+                .addButton((button) => {
+                    button.setButtonText('Generate Phrase').onClick(() => {
+                        const phrase = bip39.generateMnemonic();
+                        if (passphraseInput) passphraseInput.value = phrase;
+                        if (confirmInput) confirmInput.value = phrase;
+                        this.passphrase = phrase;
+                        this.confirmPassphrase = phrase;
+                        
+                        const display = contentEl.createEl('div', { 
+                            text: `Generated phrase: ${phrase}\n\nIMPORTANT: Save this phrase securely. You will need it to recover your encrypted data.`,
+                            attr: { style: 'background: var(--background-secondary-alt); padding: 10px; margin-top: 10px; border-radius: 4px; user-select: text; white-space: pre-wrap;' }
+                        });
+                        contentEl.insertBefore(display, contentEl.children[contentEl.children.length - 2]);
+                    });
+                });
+        }
 
         new Setting(contentEl)
             .setName('Passphrase')
@@ -71,6 +94,7 @@ export class EncryptionPassphraseModal extends Modal {
                             void this.submit();
                         }
                     });
+                    confirmInput = text.inputEl;
                 });
         }
 

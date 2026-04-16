@@ -45,6 +45,48 @@ router.post(
                 vaultId = vaultResult.rows[0].id;
             }
 
+
+const router = express.Router();
+
+// Upload a file (encrypted content)
+router.post(
+    '/upload',
+    requireAuth,
+    [
+        body('path').notEmpty().withMessage('File path is required'),
+        body('content').notEmpty().withMessage('Encrypted content is required'),
+        // body('iv').notEmpty().withMessage('Initialization vector is required'), // Storing IV with content or separately?
+        // For simplicity, let's assume content includes IV or is handled by client packing for now, 
+        // OR we add IV column. Schema has `encrypted_content_url` (text). 
+        // Let's store JSON string of {iv, data} in encrypted_content_url for now or just the data string if IV is prepended.
+        // implementation_plan says "encrypted blobs". 
+    ],
+    async (req: Request, res: Response) => {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { path, content, fileHash, version } = req.body;
+        const userId = req.currentUser!.id;
+
+        try {
+            // Find vault for user (Single vault for MVP? or pass vaultId)
+            // Assuming single default vault for now or first one found.
+            let vaultResult = await query('SELECT id FROM vaults WHERE user_id = $1 LIMIT 1', [userId]);
+            let vaultId;
+
+            if (vaultResult.rows.length === 0) {
+                // Create default vault
+                const newVault = await query(
+                    'INSERT INTO vaults (user_id, name) VALUES ($1, $2) RETURNING id',
+                    [userId, 'Default Vault']
+                );
+                vaultId = newVault.rows[0].id;
+            } else {
+                vaultId = vaultResult.rows[0].id;
+            }
+
             // Upsert file
             const existingFile = await query(
                 'SELECT id FROM vault_files WHERE vault_id = $1 AND file_path = $2',
@@ -52,17 +94,37 @@ router.post(
             );
 
             if (existingFile.rows.length > 0) {
+                const fileId = existingFile.rows[0].id;
+                
+                // Get current version to increment
+                const verRes = await query('SELECT version FROM vault_files WHERE id = $1', [fileId]);
+                const nextVersion = (verRes.rows[0]?.version || 1) + 1;
+
                 await query(
                     `UPDATE vault_files 
-                     SET encrypted_content_url = $1, file_hash = $2, updated_at = CURRENT_TIMESTAMP 
-                     WHERE id = $3`,
-                    [content, fileHash, existingFile.rows[0].id]
+                     SET encrypted_content_url = $1, file_hash = $2, version = $3, updated_at = CURRENT_TIMESTAMP 
+                     WHERE id = $4`,
+                    [content, fileHash, nextVersion, fileId]
+                );
+
+                // Insert into file_versions
+                await query(
+                    `INSERT INTO file_versions (file_id, version_number, encrypted_content_url, author_id)
+                     VALUES ($1, $2, $3, $4)`,
+                    [fileId, nextVersion, content, userId]
                 );
             } else {
-                await query(
-                    `INSERT INTO vault_files (vault_id, file_path, encrypted_content_url, file_hash) 
-                     VALUES ($1, $2, $3, $4)`,
+                const insertRes = await query(
+                    `INSERT INTO vault_files (vault_id, file_path, encrypted_content_url, file_hash, version) 
+                     VALUES ($1, $2, $3, $4, 1) RETURNING id`,
                     [vaultId, path, content, fileHash]
+                );
+
+                // Insert initial version
+                await query(
+                    `INSERT INTO file_versions (file_id, version_number, encrypted_content_url, author_id)
+                     VALUES ($1, 1, $2, $3)`,
+                    [insertRes.rows[0].id, content, userId]
                 );
             }
 
@@ -306,6 +368,76 @@ router.post('/download', requireAuth, async (req: Request, res: Response) => {
         }
 
         res.send({ content: result.rows[0].encrypted_content_url });
+    } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: 'Internal Server Error' });
+    }
+});
+
+// Get versions for a file
+router.post('/versions', requireAuth, async (req: Request, res: Response) => {
+    const userId = req.currentUser!.id;
+    const { path } = req.body;
+
+    try {
+        const fileResult = await query(
+            `SELECT f.id 
+             FROM vault_files f 
+             JOIN vaults v ON f.vault_id = v.id 
+             WHERE v.user_id = $1 AND f.file_path = $2`,
+            [userId, path]
+        );
+
+        if (fileResult.rows.length === 0) {
+            return res.status(404).send({ error: 'File not found' });
+        }
+
+        const versions = await query(
+            `SELECT fv.version_number, fv.created_at, fv.change_summary, u.display_name as author
+             FROM file_versions fv
+             LEFT JOIN users u ON fv.author_id = u.id
+             WHERE fv.file_id = $1
+             ORDER BY fv.version_number DESC`,
+            [fileResult.rows[0].id]
+        );
+
+        res.send(versions.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send({ error: 'Internal Server Error' });
+    }
+});
+
+// Download a specific version
+router.post('/download-version', requireAuth, async (req: Request, res: Response) => {
+    const userId = req.currentUser!.id;
+    const { path, version } = req.body;
+
+    try {
+        const fileResult = await query(
+            `SELECT f.id 
+             FROM vault_files f 
+             JOIN vaults v ON f.vault_id = v.id 
+             WHERE v.user_id = $1 AND f.file_path = $2`,
+            [userId, path]
+        );
+
+        if (fileResult.rows.length === 0) {
+            return res.status(404).send({ error: 'File not found' });
+        }
+
+        const versionResult = await query(
+            `SELECT encrypted_content_url 
+             FROM file_versions 
+             WHERE file_id = $1 AND version_number = $2`,
+            [fileResult.rows[0].id, version]
+        );
+
+        if (versionResult.rows.length === 0) {
+            return res.status(404).send({ error: 'Version not found' });
+        }
+
+        res.send({ content: versionResult.rows[0].encrypted_content_url });
     } catch (err) {
         console.error(err);
         res.status(500).send({ error: 'Internal Server Error' });
