@@ -6,6 +6,19 @@ export interface User {
 
 export type BackupFrequency = 'realtime' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'manual';
 
+export interface SyncFileState {
+    lastUploadedAt: number;
+    lastUploadedHash: string;
+}
+
+export interface RemoteFileRecord {
+    id: string;
+    path: string;
+    fileHash: string | null;
+    version: number;
+    updatedAt: string;
+}
+
 export interface CollaborativeSettings {
     apiUrl: string;
     token: string;
@@ -23,4 +36,6 @@ export interface CollaborativeSettings {
         iv: string;
         data: string;
     } | null;
+    syncStateUserId: string;
+    syncState: Record<string, SyncFileState>;
 }

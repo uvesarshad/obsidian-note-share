@@ -34,14 +34,28 @@ router.get('/stats', async (req: Request, res: Response) => {
 
 // List Users
 router.get('/users', async (req: Request, res: Response) => {
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '20'), 10) || 20));
+    const offset = (page - 1) * pageSize;
+
     try {
+        const totalResult = await query('SELECT COUNT(*) FROM users');
         const result = await query(
             `SELECT id, email, display_name, role, created_at, last_login, storage_used, plan_tier 
              FROM users 
              ORDER BY created_at DESC 
-             LIMIT 100` // TODO: Pagination
+             LIMIT $1
+             OFFSET $2`,
+            [pageSize, offset]
         );
-        res.send(result.rows);
+        const total = parseInt(totalResult.rows[0].count, 10);
+        res.send({
+            users: result.rows,
+            total,
+            page,
+            pageSize,
+            totalPages: Math.max(1, Math.ceil(total / pageSize))
+        });
     } catch (err) {
         console.error(err);
         res.status(500).send({ error: 'Internal Server Error' });

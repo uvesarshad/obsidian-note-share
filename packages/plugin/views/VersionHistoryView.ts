@@ -47,6 +47,14 @@ export class VersionHistoryView extends ItemView {
         }
 
         try {
+            const remoteFile = await this.plugin.syncManager.ensureRemoteFileRecord(this.activeFile, {
+                uploadIfMissing: true
+            });
+            if (!remoteFile) {
+                this.versions = [];
+                return;
+            }
+
             const response = await request({
                 url: `${this.plugin.settings.apiUrl}/api/files/versions`,
                 method: 'POST',
@@ -54,16 +62,17 @@ export class VersionHistoryView extends ItemView {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.plugin.settings.token}`
                 },
-                body: JSON.stringify({ path: this.activeFile.path })
+                body: JSON.stringify({ fileId: remoteFile.id })
             });
-            this.versions = JSON.parse(response);
+            const data = JSON.parse(response);
+            this.versions = data.versions || [];
         } catch (e) {
             console.error('Failed to load versions', e);
             this.versions = [];
         }
     }
 
-    async restoreVersion(versionNumber: number) {
+    async downloadAndDecryptVersion(versionNumber: number) {
         if (!this.activeFile || !this.plugin.settings.token) return;
 
         const encryptionReady = await this.plugin.ensureEncryptionReady({
@@ -73,6 +82,13 @@ export class VersionHistoryView extends ItemView {
         if (!encryptionReady) return;
 
         try {
+            const remoteFile = await this.plugin.syncManager.ensureRemoteFileRecord(this.activeFile, {
+                uploadIfMissing: true
+            });
+            if (!remoteFile) {
+                throw new Error('File is not available for version download.');
+            }
+
             const response = await request({
                 url: `${this.plugin.settings.apiUrl}/api/files/download-version`,
                 method: 'POST',
@@ -80,7 +96,7 @@ export class VersionHistoryView extends ItemView {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.plugin.settings.token}`
                 },
-                body: JSON.stringify({ path: this.activeFile.path, version: versionNumber })
+                body: JSON.stringify({ fileId: remoteFile.id, version: versionNumber })
             });
 
             const data = JSON.parse(response);

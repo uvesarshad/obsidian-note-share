@@ -13,6 +13,9 @@ interface User {
 
 export default function Users() {
     const [users, setUsers] = useState<User[]>([]);
+    const [page, setPage] = useState(1);
+    const [totalPages, setTotalPages] = useState(1);
+    const [total, setTotal] = useState(0);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
 
@@ -25,7 +28,7 @@ export default function Users() {
             }
 
             try {
-                const res = await fetch('http://localhost:3008/api/admin/users', {
+                const res = await fetch(`http://localhost:3008/api/admin/users?page=${page}&pageSize=20`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
 
@@ -35,7 +38,9 @@ export default function Users() {
                 }
 
                 const data = await res.json();
-                setUsers(data);
+                setUsers(data.users || []);
+                setTotalPages(data.totalPages || 1);
+                setTotal(data.total || 0);
             } catch (err) {
                 console.error(err);
             } finally {
@@ -44,13 +49,14 @@ export default function Users() {
         };
 
         fetchUsers();
-    }, [router]);
+    }, [page, router]);
 
     if (loading) return <Layout><div>Loading...</div></Layout>;
 
     return (
         <Layout>
             <h1 className="text-3xl font-bold mb-8">User Management</h1>
+            <div className="mb-4 text-sm text-gray-600">Total users: {total}</div>
 
             <div className="bg-white shadow rounded-lg overflow-hidden">
                 <table className="min-w-full divide-y divide-gray-200">
@@ -79,6 +85,24 @@ export default function Users() {
                         ))}
                     </tbody>
                 </table>
+            </div>
+
+            <div className="mt-4 flex items-center gap-3">
+                <button
+                    className="bg-gray-800 text-white px-3 py-2 rounded disabled:bg-gray-300"
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                >
+                    Previous
+                </button>
+                <span className="text-sm text-gray-600">Page {page} of {totalPages}</span>
+                <button
+                    className="bg-gray-800 text-white px-3 py-2 rounded disabled:bg-gray-300"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                >
+                    Next
+                </button>
             </div>
         </Layout>
     );

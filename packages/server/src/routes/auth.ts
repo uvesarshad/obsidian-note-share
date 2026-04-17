@@ -5,7 +5,7 @@ import bcrypt from 'bcrypt';
 import { query } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
-import { authenticator } from 'otplib';
+import { generateSecret, generateURI, verify } from 'otplib';
 import qrcode from 'qrcode';
 
 const router = express.Router();
@@ -104,8 +104,11 @@ router.post(
                     return res.status(401).send({ error: 'mfa_required', message: 'MFA code is required' });
                 }
 
-                const isValid = authenticator.verify({ token: mfaCode, secret: existingUser.rows[0].mfa_secret });
-                if (!isValid) {
+                const verificationResult = await verify({
+                    token: mfaCode,
+                    secret: existingUser.rows[0].mfa_secret
+                });
+                if (!verificationResult.valid) {
                     return res.status(400).send({ error: 'Invalid credentials' }); // Vague on purpose
                 }
             }
@@ -240,8 +243,12 @@ router.post('/mfa/setup', currentUser, async (req: Request, res: Response) => {
     if (!req.currentUser) return res.status(401).send({ error: 'Not authenticated' });
 
     try {
-        const secret = authenticator.generateSecret();
-        const otpauthContent = authenticator.keyuri(req.currentUser.email, 'Obsidian Collab Cloud', secret);
+        const secret = generateSecret();
+        const otpauthContent = generateURI({
+            secret,
+            issuer: 'Obsidian Collab Cloud',
+            label: req.currentUser.email
+        });
         const qrCodeDataUrl = await qrcode.toDataURL(otpauthContent);
 
         // Save secret temporarily until verified
@@ -266,8 +273,8 @@ router.post('/mfa/verify', currentUser, async (req: Request, res: Response) => {
         const secret = userRes.rows[0].mfa_secret;
         if (!secret) return res.status(400).send({ error: 'MFA not set up' });
 
-        const isValid = authenticator.verify({ token: code, secret });
-        if (isValid) {
+        const verificationResult = await verify({ token: code, secret });
+        if (verificationResult.valid) {
             await query('UPDATE users SET mfa_enabled = true WHERE id = $1', [req.currentUser.id]);
             res.send({ message: 'MFA enabled successfully' });
         } else {

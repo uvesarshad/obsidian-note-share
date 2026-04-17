@@ -204,10 +204,12 @@ export class CollaborativeSettingsTab extends PluginSettingTab {
         // --- Auth Status ---
         containerEl.createEl('hr');
 
-        // Status Indicator
         const statusDiv = containerEl.createDiv({ cls: 'setting-item-description' });
-        // TODO: Hook into Socket.io connection state
-        statusDiv.setText(this.plugin.settings.token ? 'Status: Authenticated' : 'Status: Disconnected');
+        if (!this.plugin.settings.token) {
+            statusDiv.setText('Status: Signed out');
+        } else {
+            statusDiv.setText(`Status: ${this.plugin.collaborationManager.getConnectionStatusSummary()}`);
+        }
 
 
         if (this.plugin.settings.token) {

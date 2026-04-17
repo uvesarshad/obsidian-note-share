@@ -5,6 +5,7 @@ export type SharePermissionType = 'public_view' | 'public_edit' | 'private';
 export type ShareRole = 'owner' | 'editor' | 'commenter' | 'viewer';
 
 export interface SharedFileEntry {
+    file_id: string;
     path: string;
     permission_type: SharePermissionType;
     role: ShareRole;
@@ -14,6 +15,7 @@ export interface SharedFileEntry {
 
 export interface SharedStatusResponse {
     isShared: boolean;
+    fileId?: string;
     path?: string;
     permissionType?: SharePermissionType;
     role?: ShareRole;
@@ -28,7 +30,11 @@ export class SharingService {
         this.plugin = plugin;
     }
 
-    async shareFile(path: string, permissionType: SharePermissionType): Promise<{
+    async shareFile(
+        lookup: { fileId?: string; path?: string },
+        permissionType: SharePermissionType
+    ): Promise<{
+        fileId?: string;
         shareToken: string;
         role: ShareRole;
         permissionType: SharePermissionType;
@@ -40,11 +46,12 @@ export class SharingService {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${this.plugin.settings.token}`
             },
-            body: JSON.stringify({ path, permissionType })
+            body: JSON.stringify({ ...lookup, permissionType })
         });
 
         const data = JSON.parse(response);
         return {
+            fileId: data.fileId,
             shareToken: data.shareToken,
             role: data.role,
             permissionType: data.permissionType
@@ -64,9 +71,17 @@ export class SharingService {
         return JSON.parse(response);
     }
 
-    async getShareStatus(path: string): Promise<SharedStatusResponse> {
+    async getShareStatus(lookup: { fileId?: string; path?: string }): Promise<SharedStatusResponse> {
+        const queryParams = new URLSearchParams();
+        if (lookup.fileId) {
+            queryParams.set('fileId', lookup.fileId);
+        }
+        if (lookup.path) {
+            queryParams.set('path', lookup.path);
+        }
+
         const response = await request({
-            url: `${this.plugin.settings.apiUrl}/api/files/shared-status?path=${encodeURIComponent(path)}`,
+            url: `${this.plugin.settings.apiUrl}/api/files/shared-status?${queryParams.toString()}`,
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',

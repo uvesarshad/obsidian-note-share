@@ -23,7 +23,9 @@ const DEFAULT_SETTINGS: CollaborativeSettings = {
     planManagementUrl: '',
     encryptionSalt: '',
     encryptionUserId: '',
-    encryptionVerifier: null
+    encryptionVerifier: null,
+    syncStateUserId: '',
+    syncState: {}
 };
 
 const ENCRYPTION_VERIFIER_TEXT = 'obsidian-collaborative-key-check';
@@ -36,6 +38,7 @@ interface SharedFileState {
 
 export default class CollaborativePlugin extends Plugin {
     settings: CollaborativeSettings;
+    settingsTab: CollaborativeSettingsTab;
     collaborationManager: CollaborationManager;
     syncManager: SyncManager;
     encryptionService: EncryptionService;
@@ -77,8 +80,8 @@ export default class CollaborativePlugin extends Plugin {
             this.activateVersionHistoryView();
         });
 
-        // This adds a settings tab so the user can configure various aspects of the plugin
-        this.addSettingTab(new CollaborativeSettingsTab(this.app, this));
+        this.settingsTab = new CollaborativeSettingsTab(this.app, this);
+        this.addSettingTab(this.settingsTab);
 
         // Add command to test login status
         this.addCommand({
@@ -116,6 +119,8 @@ export default class CollaborativePlugin extends Plugin {
         this.registerEvent(this.app.workspace.on('file-open', async (file) => {
             if (file) {
                 await this.collaborationManager.joinDocument(file);
+            } else {
+                this.collaborationManager.leaveDocument();
             }
             await this.updateShareStatusIndicator(file?.path);
             
@@ -197,15 +202,26 @@ export default class CollaborativePlugin extends Plugin {
             let lastResult: Awaited<ReturnType<SharingService['shareFile']>> | null = null;
 
             for (const file of targetFiles) {
-                const uploaded = await this.syncManager.uploadFile(file);
+                const uploaded = await this.syncManager.uploadFile(file, {
+                    force: true,
+                    ignoreSyncRules: true
+                });
                 if (!uploaded) {
                     failedPaths.push(file.path);
                     continue;
                 }
 
                 try {
+                    const remoteFile = await this.syncManager.ensureRemoteFileRecord(file, {
+                        uploadIfMissing: true
+                    });
+                    if (!remoteFile) {
+                        failedPaths.push(file.path);
+                        continue;
+                    }
+
                     lastResult = await this.sharingService.shareFile(
-                        file.path,
+                        { fileId: remoteFile.id, path: file.path },
                         permissionType as SharePermissionType
                     );
                     successCount += 1;
@@ -277,7 +293,13 @@ export default class CollaborativePlugin extends Plugin {
 
         if (!sharedState) {
             try {
-                const status = await this.sharingService.getShareStatus(path);
+                const activeFile = this.app.workspace.getActiveFile();
+                const remoteFile = activeFile && activeFile.path === path
+                    ? await this.syncManager.ensureRemoteFileRecord(activeFile)
+                    : null;
+                const status = await this.sharingService.getShareStatus(
+                    remoteFile ? { fileId: remoteFile.id, path } : { path }
+                );
                 if (status.isShared && status.role && status.permissionType) {
                     sharedState = {
                         role: status.role,
@@ -427,6 +449,12 @@ export default class CollaborativePlugin extends Plugin {
         }
 
         return this.settings.encryptionVerifier;
+    }
+
+    refreshSettingsDisplay(): void {
+        if (this.settingsTab?.containerEl?.isConnected) {
+            void this.settingsTab.display();
+        }
     }
 
     async activateSharedNotesView() {
