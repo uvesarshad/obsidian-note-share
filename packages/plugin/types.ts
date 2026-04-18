@@ -19,12 +19,40 @@ export interface RemoteFileRecord {
     updatedAt: string;
 }
 
+export interface SearchIndexEntry {
+    path: string;
+    title: string;
+    extension: string;
+    mtime: number;
+    tags: string[];
+    mentions: string[];
+    content: string;
+}
+
+export interface SmartSearchQuery {
+    query: string;
+    tag: string;
+    mention: string;
+    fileType: string;
+    startDate: string;
+    endDate: string;
+    caseSensitive: boolean;
+}
+
+export interface SearchResult {
+    entry: SearchIndexEntry;
+    snippet: string;
+    score: number;
+}
+
 export interface CollaborativeSettings {
     apiUrl: string;
     token: string;
     user: User | null;
     syncFolders: string[];
     syncExcludedFolders: string[];
+    syncFrequency: BackupFrequency;
+    syncPaused: boolean;
     backupFrequency: BackupFrequency;
     fullVaultBackupEnabled: boolean;
     backupAllowedFrequencies: BackupFrequency[];
@@ -38,4 +66,6 @@ export interface CollaborativeSettings {
     } | null;
     syncStateUserId: string;
     syncState: Record<string, SyncFileState>;
+    searchIndexBuiltAt: number;
+    searchIndex: Record<string, SearchIndexEntry>;
 }

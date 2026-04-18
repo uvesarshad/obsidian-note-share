@@ -1,151 +1,219 @@
-# Local Start Flow + Strict Smoke Test Checklist
+# Local Start Flow And V1 Smoke Test
 
-Last updated: February 27, 2026
+Last updated: April 18, 2026
 
-## 1. Preconditions (Must pass before start)
+This checklist is for the actual shipped `v1` scope:
 
-- [ ] Node.js and npm installed (`node -v`, `npm -v`)
+- auth
+- encrypted sync
+- collaboration
+- sharing
+- version history
+- vault configuration backup
+- local smart search
+- basic admin stats/users/backup policies
+
+## 1. Preconditions
+
+- [ ] Node.js and npm installed
 - [ ] PostgreSQL is running
-- [ ] `packages/server/.env` exists and is valid:
+- [ ] `packages/server/.env` exists and includes:
   - [ ] `PORT=3008`
-  - [ ] `DB_USER`, `DB_HOST`, `DB_NAME`, `DB_PASSWORD`, `DB_PORT`
-  - [ ] `JWT_SECRET` is set
-- [ ] Dependencies installed at repo root:
-  - Command: `npm.cmd install`
-- [ ] DB schema initialized:
-  - Command: `npm.cmd run init-db --workspace packages/server`
-  - Expected: `Database initialized successfully!`
+  - [ ] `DB_USER`
+  - [ ] `DB_HOST`
+  - [ ] `DB_NAME`
+  - [ ] `DB_PASSWORD`
+  - [ ] `DB_PORT`
+  - [ ] `JWT_SECRET`
+- [ ] Dependencies installed:
+
+```powershell
+npm.cmd install
+```
+
+- [ ] Database initialized:
+
+```powershell
+npm.cmd run init-db --workspace=@obsidian-collaborative/server
+```
+
+Expected result:
+- [ ] `Database initialized successfully!`
 
 Stop if any precondition fails.
 
-## 2. Local Start Flow (3 terminals)
+## 2. Local Start Flow
 
-## Terminal 1: Server
+### Terminal 1: Server
 
-Command:
 ```powershell
 cd E:\Projects\obsidian_plugin
 npm.cmd run dev --workspace=@obsidian-collaborative/server
 ```
 
 Pass criteria:
-- [ ] Server starts with no fatal error
-- [ ] Console shows `Server is running on port 3008`
+- [ ] server starts without fatal error
+- [ ] console shows `Server is running on port 3008`
 
-## Terminal 2: Admin
+### Terminal 2: Admin
 
-Command:
+Default:
+
 ```powershell
 cd E:\Projects\obsidian_plugin
 npm.cmd run dev --workspace=@obsidian-collaborative/admin
 ```
 
+If port `3000` is already in use:
+
+```powershell
+cd E:\Projects\obsidian_plugin
+npm.cmd run dev --workspace=@obsidian-collaborative/admin -- -p 3010
+```
+
 Pass criteria:
-- [ ] Next.js dev server starts with no fatal error
-- [ ] `http://localhost:3000` opens
+- [ ] Next.js starts without fatal error
+- [ ] admin login page loads on the selected port
 
-## Terminal 3: Plugin watcher
+### Terminal 3: Plugin watcher
 
-Command:
 ```powershell
 cd E:\Projects\obsidian_plugin
 npm.cmd run dev --workspace=obsidian-collaborative-plugin
 ```
 
 Pass criteria:
-- [ ] Build watcher starts
+- [ ] watcher starts
 - [ ] `packages/plugin/main.js` updates on source change
 
-## Obsidian plugin install path
+## 3. Obsidian Plugin Setup
 
-- [ ] Your vault has plugin folder path:
+- [ ] plugin exists in:
   - `<VaultPath>\.obsidian\plugins\obsidian-collaborative-plugin`
-- [ ] Plugin files are available there (or junction to `E:\Projects\obsidian_plugin\packages\plugin`)
-- [ ] In Obsidian, Community Plugins enabled
-- [ ] `Obsidian Collaborative Cloud` plugin enabled
+- [ ] `main.js` and `manifest.json` are present there, or the directory is a junction to `packages/plugin`
+- [ ] Community Plugins enabled in Obsidian
+- [ ] `Obsidian Collaborative Cloud` enabled in Obsidian
 
-Optional junction command:
+Optional junction:
+
 ```powershell
 New-Item -ItemType Junction -Path "C:\path\to\Vault\.obsidian\plugins\obsidian-collaborative-plugin" -Target "E:\Projects\obsidian_plugin\packages\plugin"
 ```
 
-## 3. Strict Smoke Test Gates
+## 4. Smoke Gates
 
-Run gates in order. Do not continue on failed gate.
+Run gates in order.
 
-## Gate A: Health/API reachability
+### Gate A: Health And Reachability
 
-- [ ] `GET http://localhost:3008/` returns success text
-- [ ] `GET http://localhost:3000/login` loads admin login page
+- [ ] `GET http://localhost:3008/` succeeds
+- [ ] admin login page loads
 
 Quick checks:
+
 ```powershell
 Invoke-WebRequest -Uri http://localhost:3008/
 Invoke-WebRequest -Uri http://localhost:3000/login
 ```
 
-## Gate B: Auth and roles
+If admin is on `3010`, use:
 
-- [ ] Register or login one normal user from plugin settings
-- [ ] Confirm plugin shows authenticated status
-- [ ] Promote one user to admin in DB:
+```powershell
+Invoke-WebRequest -Uri http://localhost:3010/login
+```
+
+### Gate B: Auth And Roles
+
+- [ ] register or login a normal user from plugin settings
+- [ ] plugin shows signed-in status
+- [ ] vault passphrase can be set or unlocked
+- [ ] promote one user to admin in DB if needed:
+
 ```sql
 UPDATE users SET role = 'admin' WHERE email = 'admin@example.com';
 ```
-- [ ] Admin can login at `http://localhost:3000/login`
 
-## Gate C: Share & Access Control (new flow)
+- [ ] admin can log in
 
-- [ ] Open a note in Obsidian
-- [ ] Right-click file in sidebar and select `Share & Access Control`
-- [ ] Enter permission value: `private` (or `public_view`, `public_edit`)
-- [ ] Success notice appears
-- [ ] Status bar shows share state:
-  - expected format: `Share: <role> (<permission>)`
-- [ ] Open `Shared Notes` view and verify note appears in list
+### Gate C: Sync
 
-API validation (optional):
-- [ ] `GET /api/files/shared` returns at least one shared file entry
-- [ ] `GET /api/files/shared-status?path=<note-path>` returns `isShared: true`
+- [ ] change a note and confirm automatic sync occurs when sync is enabled
+- [ ] `Sync: ...` status updates in plugin
+- [ ] `Sync Now` works from settings or command palette
+- [ ] `Pause Sync` prevents automatic uploads
+- [ ] excluded folders are not synced
 
-## Gate D: Backup policy enforcement (new flow)
+### Gate D: Share And Collaboration
 
-- [ ] Admin opens `Backup Policies` page
-- [ ] Edit a plan (for example `free`) and save:
-  - `fullVaultBackupEnabled = false`
-  - `allowedFrequencies = manual,daily`
-- [ ] In plugin (user on that plan), settings reflect policy:
-  - full vault backup toggle disabled if disallowed
-  - backup frequency dropdown only shows allowed values
-- [ ] Set allowed value (example: `daily`) and save successfully
-- [ ] Try disallowed value via API and confirm validation fails (400)
+- [ ] open a note in Obsidian
+- [ ] right-click file in sidebar and select `Share & Access Control`
+- [ ] modal opens
+- [ ] choose `private`, `public_view`, or `public_edit`
+- [ ] success notice appears
+- [ ] status bar shows:
+  - `Share: <role> (<permission>)`
+- [ ] `Shared Notes` view shows the shared note
+- [ ] open the same note in a second client and verify collaboration connectivity if available
 
-## Gate E: Regression sanity
+Optional API checks:
+- [ ] `GET /api/files/shared` returns shared entries
+- [ ] `GET /api/files/shared-status` returns `isShared: true` for the shared file
 
-- [ ] File sync still uploads on modify when frequency and sync rules allow
-- [ ] Admin dashboard (`/` and `/users`) still loads
-- [ ] No fatal runtime errors in server/admin/plugin terminals
+### Gate E: Version History
 
-## 4. Exit Criteria (Release-ready smoke)
+- [ ] open `Version History`
+- [ ] versions load for a synced file
+- [ ] `View Diff` works
+- [ ] restore a version successfully overwrites the active file
 
-Mark release-ready only when all are true:
+### Gate F: Vault Configuration Backup
 
-- [ ] Gates A-E all passed
-- [ ] No blocker severity issues open
-- [ ] Smoke results recorded (date, tester, pass/fail notes)
+- [ ] `Backup Config` succeeds
+- [ ] `Restore Config` succeeds on latest snapshot
+- [ ] admin backup policy changes are reflected in plugin settings
+- [ ] disallowed backup preference values are rejected by the API
 
-## 5. Smoke Result Template
+### Gate G: Smart Search
+
+- [ ] `Open Smart Search` command or ribbon action opens the modal
+- [ ] results appear for a known phrase in the vault
+- [ ] tag filtering works
+- [ ] mention filtering works
+- [ ] file-type filtering works
+- [ ] rebuild index completes successfully
+- [ ] opening a result opens the matching file
+
+### Gate H: Admin Regression
+
+- [ ] dashboard loads
+- [ ] users page loads
+- [ ] backup policies page loads
+- [ ] no fatal runtime errors appear in server/admin/plugin consoles
+
+## 5. Exit Criteria
+
+Mark `v1` runtime smoke complete only when all are true:
+
+- [ ] Gates A-H passed
+- [ ] no blocker-severity issues remain open
+- [ ] smoke notes recorded
+
+## 6. Smoke Result Template
 
 ```md
 Date:
 Tester:
 Branch/Commit:
+Admin Port:
 
 Gate A: PASS/FAIL
 Gate B: PASS/FAIL
 Gate C: PASS/FAIL
 Gate D: PASS/FAIL
 Gate E: PASS/FAIL
+Gate F: PASS/FAIL
+Gate G: PASS/FAIL
+Gate H: PASS/FAIL
 
 Blockers:
 - none / list

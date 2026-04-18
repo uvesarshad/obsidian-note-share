@@ -1,118 +1,182 @@
-# Obsidian Collaborative Plugin Monorepo
+# Obsidian Collaborative Cloud
 
-This monorepo contains the source code for the Obsidian Collaborative Plugin ecosystem, including the Obsidian plugin itself, the backend server, and the admin dashboard.
+This monorepo contains the current `v1` code for Obsidian Collaborative Cloud:
 
-```mermaid
-graph TD
-    subgraph "Client Side"
-        P[Obsidian Plugin]
-        S[Shared Types]
-    end
-    
-    subgraph "Backend Infrastructure"
-        B[Node.js Server]
-        DB[(PostgreSQL)]
-    end
-    
-    subgraph "Management"
-        A[Admin Dashboard]
-    end
-    
-    P <-->|WebSockets / Yjs| B
-    B <--> DB
-    A <-->|REST API| B
-    P -.->|Uses| S
-    B -.->|Uses| S
-    A -.->|Uses| S
-```
+- an Obsidian plugin
+- a Node.js/Express API server
+- a Next.js admin dashboard
+- a shared package for common types
 
-## What it does
-The Obsidian Collaborative Plugin transforms Obsidian into a multi-user collaborative environment. It enables real-time synchronization of notes across different users and devices while maintaining privacy through end-to-end encryption. The ecosystem includes a high-performance backend server for data orchestration and an administrative interface for system management.
+The repository is scoped to the collaboration/sync/search/admin core. It does not currently include the full long-range product vision from `temp/PRD.md`.
 
-## Key Features
-- **🔒 End-to-End Encryption**: Secure your notes with client-side encryption. Only you and your collaborators hold the keys.
-- **⚡ Real-time Sync**: Experience seamless multi-user editing powered by Yjs and WebSockets.
-- **🛠️ Self-Hosted Freedom**: Full control over your data with an easily deployable Node.js backend and PostgreSQL database.
-- **🖥️ Admin Control**: Dedicated dashboard to manage users, monitor system health, and oversee the ecosystem.
-- **📦 Monorepo Architecture**: Clean, type-safe development using shared logic across the plugin, server, and dashboard.
+## V1 scope
 
-## Project Structure
+### Included
+- email/password auth
+- MFA setup and verification
+- client-side encrypted sync
+- real-time collaboration
+- file and folder sharing
+- version history diff and restore
+- encrypted `.obsidian` configuration backup
+- local smart search and indexing
+- basic admin stats, users, and backup policy controls
 
-- **packages/plugin**: The Obsidian plugin (client-side).
-- **packages/server**: The Node.js/Express backend server with WebSocket support.
-- **packages/admin**: The Next.js Admin Dashboard.
-- **packages/shared**: Shared TypeScript types and utilities.
+### Not included
+- public publishing
+- payment gateways and billing
+- enterprise SSO
+- broad analytics/reporting
+- server-side search/indexing
+
+## Repository structure
+
+- `packages/plugin`: Obsidian plugin
+- `packages/server`: Express API server + Socket.io collaboration server
+- `packages/admin`: Next.js admin dashboard
+- `packages/shared`: shared types/utilities
+- `docs`: product and runtime docs
+- `temp`: scope notes, PRD, and working project docs
 
 ## Prerequisites
 
-- **Node.js**: v18 or higher.
-- **npm**: v9 or higher (supports workspaces).
-- **PostgreSQL**: v14 or higher.
+- Node.js 18+
+- npm 9+
+- PostgreSQL 14+
 
-## Setup Instructions
+## Setup
 
-1.  **Clone the repository:**
-    ```bash
-    git clone <repository-url>
-    cd obsidian-collaborative-plugin
-    ```
+1. Install dependencies:
 
-2.  **Install dependencies:**
-    ```bash
-    npm install
-    ```
+```bash
+npm install
+```
 
-3.  **Database Setup:**
-    - **Step 3a:** Check if PostgreSQL is running and access the prompt (Windows):
-        ```bash
-        psql -U postgres
-        ```
-        *(If asked for a password, enter the one you set during installation)*
+2. Create the PostgreSQL database:
 
-    - **Step 3b:** Create the database:
-        ```sql
-        CREATE DATABASE obsidian_collab;
-        \q
-        ```
+```sql
+CREATE DATABASE obsidian_collab;
+```
 
-    - **Step 3c:** Configure environment:
-        - Copy `.env.example` to `packages/server/.env` (if not done).
-        - Update `DB_PASSWORD` in `packages/server/.env` with your Postgres password.
+3. Configure `packages/server/.env` with:
 
-    - **Step 3d:** Initialize the schema:
-        ```bash
-        npm run init-db --workspace=@obsidian-collaborative/server
-        ```
+```env
+PORT=3008
+DB_USER=...
+DB_HOST=...
+DB_NAME=obsidian_collab
+DB_PASSWORD=...
+DB_PORT=5432
+JWT_SECRET=...
+```
 
-4.  **Admin Migration (Optional):**
-    - To add admin roles to the database:
-        ```bash
-        npx ts-node packages/server/scripts/migrate-admin.ts
-        ```
+4. Initialize the schema:
 
-## Development Workflow
+```bash
+npm run init-db --workspace=@obsidian-collaborative/server
+```
 
-### Running the Server
+5. Optional admin-role migration:
+
+```bash
+npx ts-node packages/server/scripts/migrate-admin.ts
+```
+
+## Local development
+
+### Server
+
 ```bash
 npm run dev --workspace=@obsidian-collaborative/server
 ```
-The server runs on `http://localhost:3008`.
 
-### Building the Plugin
+Default URL: `http://localhost:3008`
+
+### Admin
+
+```bash
+npm run dev --workspace=@obsidian-collaborative/admin
+```
+
+Default URL: `http://localhost:3000`
+
+If port `3000` is already occupied, run:
+
+```bash
+npm run dev --workspace=@obsidian-collaborative/admin -- -p 3010
+```
+
+### Plugin watcher
+
 ```bash
 npm run dev --workspace=obsidian-collaborative-plugin
 ```
-This watches source changes and rebuilds `packages/plugin/main.js`. Point your Obsidian plugin folder to `packages/plugin` or copy `main.js` and `manifest.json` into your vault plugin directory.
 
-### Workspace Validation
+This rebuilds `packages/plugin/main.js` on change.
+
+## Plugin installation during development
+
+Point your Obsidian vault plugin folder at `packages/plugin`, or copy the built plugin files into:
+
+```text
+<VaultPath>\.obsidian\plugins\obsidian-collaborative-plugin
+```
+
+Minimum required plugin artifacts:
+- `main.js`
+- `manifest.json`
+
+Optional Windows junction:
+
+```powershell
+New-Item -ItemType Junction -Path "C:\path\to\Vault\.obsidian\plugins\obsidian-collaborative-plugin" -Target "E:\Projects\obsidian_plugin\packages\plugin"
+```
+
+## Validation
+
+Workspace validation:
+
 ```bash
 npm run build
 npm run test
 ```
-`npm run build` runs every workspace build script. `npm run test` currently runs the server backup-policy test suite and skips packages without tests.
 
-### Running the Admin Dashboard
+Package-specific plugin build:
+
 ```bash
-npm run dev --workspace=@obsidian-collaborative/admin
+npm run build --workspace packages/plugin
 ```
-The dashboard runs on `http://localhost:3000`.
+
+## Current plugin capabilities
+
+### Collaboration and sharing
+- real-time collaborative editing
+- active-file share status
+- share/access modal for files and folders
+- shared notes view
+
+### Sync and backup
+- encrypted upload/download
+- automatic sync scheduling
+- manual sync command
+- sync pause/resume
+- vault configuration backup and restore
+
+### Search and recovery
+- local smart search index
+- search by text, tags, mentions, date range, file type, and case sensitivity
+- version history diff and restore
+
+## Current limitations
+
+- The backup flow is currently aimed at vault configuration recovery, not a full binary-safe vault archive format.
+- Search is local to the plugin. There is no remote search service.
+- Real Obsidian runtime validation is still required before a release is called done.
+
+## Related docs
+
+- `docs/overview.md`
+- `docs/local-start-flow-and-smoke-test.md`
+- `temp/v1-scope.md`
+- `temp/project-finish-task-list.md`
+- `temp/PRD.md`

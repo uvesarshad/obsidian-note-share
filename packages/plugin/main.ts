@@ -9,6 +9,9 @@ import { SharePermissionType, SharingService } from './sharing';
 import { SharedNotesView, VIEW_TYPE_SHARED_NOTES } from './views/SharedNotesView';
 import { VersionHistoryView, VIEW_TYPE_VERSION_HISTORY } from './views/VersionHistoryView';
 import { EncryptionPassphraseModal } from './EncryptionPassphraseModal';
+import { SearchManager } from './search';
+import { SmartSearchModal } from './SmartSearchModal';
+import { ShareAccessModal } from './ShareAccessModal';
 
 const DEFAULT_SETTINGS: CollaborativeSettings = {
     apiUrl: 'http://localhost:3008',
@@ -16,6 +19,8 @@ const DEFAULT_SETTINGS: CollaborativeSettings = {
     user: null,
     syncFolders: [], // Empty means all
     syncExcludedFolders: [],
+    syncFrequency: 'realtime',
+    syncPaused: false,
     backupFrequency: 'realtime',
     fullVaultBackupEnabled: false,
     backupAllowedFrequencies: ['manual', 'daily'],
@@ -25,7 +30,9 @@ const DEFAULT_SETTINGS: CollaborativeSettings = {
     encryptionUserId: '',
     encryptionVerifier: null,
     syncStateUserId: '',
-    syncState: {}
+    syncState: {},
+    searchIndexBuiltAt: 0,
+    searchIndex: {}
 };
 
 const ENCRYPTION_VERIFIER_TEXT = 'obsidian-collaborative-key-check';
@@ -44,10 +51,13 @@ export default class CollaborativePlugin extends Plugin {
     encryptionService: EncryptionService;
     backupService: BackupService;
     sharingService: SharingService;
+    searchManager: SearchManager;
     private shareStatusEl: HTMLElement;
+    private syncStatusEl: HTMLElement;
     private sharedFileIndex = new Map<string, SharedFileState>();
     private encryptionPromptPromise: Promise<boolean> | null = null;
     private encryptionLockedNoticeShown = false;
+    private syncStatusMessage = 'idle';
 
     async onload() {
         await this.loadSettings();
@@ -57,8 +67,11 @@ export default class CollaborativePlugin extends Plugin {
         this.syncManager = new SyncManager(this, this.encryptionService);
         this.backupService = new BackupService(this, this.encryptionService);
         this.sharingService = new SharingService(this);
+        this.searchManager = new SearchManager(this);
         this.shareStatusEl = this.addStatusBarItem();
+        this.syncStatusEl = this.addStatusBarItem();
         this.shareStatusEl.setText('Share: sign in');
+        this.syncStatusEl.setText(`Sync: ${this.settings.syncPaused ? 'paused' : 'idle'}`);
 
         this.registerView(
             VIEW_TYPE_SHARED_NOTES,
@@ -78,6 +91,10 @@ export default class CollaborativePlugin extends Plugin {
         // Add Ribbon Icon for Version History
         this.addRibbonIcon('history', 'Version History', () => {
             this.activateVersionHistoryView();
+        });
+
+        this.addRibbonIcon('search', 'Smart Search', () => {
+            void this.openSmartSearchModal();
         });
 
         this.settingsTab = new CollaborativeSettingsTab(this.app, this);
@@ -112,8 +129,44 @@ export default class CollaborativePlugin extends Plugin {
             }
         });
 
+        this.addCommand({
+            id: 'open-smart-search',
+            name: 'Open Smart Search',
+            callback: () => {
+                void this.openSmartSearchModal();
+            }
+        });
+
+        this.addCommand({
+            id: 'rebuild-smart-search-index',
+            name: 'Rebuild Smart Search Index',
+            callback: () => {
+                void this.searchManager.rebuildIndex();
+            }
+        });
+
+        this.addCommand({
+            id: 'manual-sync-now',
+            name: 'Sync Vault Now',
+            callback: () => {
+                void this.runManualSync();
+            }
+        });
+
+        this.addCommand({
+            id: 'toggle-sync-pause',
+            name: 'Pause Or Resume Sync',
+            callback: async () => {
+                this.settings.syncPaused = !this.settings.syncPaused;
+                await this.saveSettings();
+                this.setSyncStatus(this.settings.syncPaused ? 'paused' : 'idle');
+                this.refreshSettingsDisplay();
+            }
+        });
+
         this.registerEditorExtension(this.collaborationManager.getExtension());
         this.syncManager.registerEvents();
+        this.searchManager.registerEvents();
         this.registerFileMenuActions();
 
         this.registerEvent(this.app.workspace.on('file-open', async (file) => {
@@ -136,6 +189,7 @@ export default class CollaborativePlugin extends Plugin {
             await this.refreshSharedFileIndex();
         }
         await this.updateShareStatusIndicator(this.app.workspace.getActiveFile()?.path);
+        void this.searchManager.ensureIndexReady();
         if (this.settings.token) {
             await this.ensureEncryptionReady({
                 interactive: true,
@@ -173,18 +227,17 @@ export default class CollaborativePlugin extends Plugin {
         const targetLabel = target instanceof TFolder
             ? `${target.path} (${targetFiles.length} files)`
             : target.path;
-        const input = window.prompt(
-            `Set permission for ${targetLabel}\nUse one of: private, public_view, public_edit`,
-            'private'
-        );
+        const existingShareState = target instanceof TFile
+            ? this.sharedFileIndex.get(target.path)
+            : undefined;
+        const permissionType = await new ShareAccessModal(this.app, {
+            targetLabel,
+            fileCount: targetFiles.length,
+            currentPermissionType: existingShareState?.permissionType,
+            currentRole: existingShareState?.role
+        }).openAndWait();
 
-        if (!input) {
-            return;
-        }
-
-        const permissionType = input.trim().toLowerCase();
-        if (!['private', 'public_view', 'public_edit'].includes(permissionType)) {
-            new Notice('Invalid permission type. Expected private, public_view, or public_edit.');
+        if (!permissionType) {
             return;
         }
 
@@ -222,7 +275,7 @@ export default class CollaborativePlugin extends Plugin {
 
                     lastResult = await this.sharingService.shareFile(
                         { fileId: remoteFile.id, path: file.path },
-                        permissionType as SharePermissionType
+                        permissionType
                     );
                     successCount += 1;
                 } catch (error) {
@@ -455,6 +508,27 @@ export default class CollaborativePlugin extends Plugin {
         if (this.settingsTab?.containerEl?.isConnected) {
             void this.settingsTab.display();
         }
+    }
+
+    setSyncStatus(message: string): void {
+        this.syncStatusMessage = message;
+        if (this.syncStatusEl) {
+            this.syncStatusEl.setText(`Sync: ${message}`);
+        }
+        this.refreshSettingsDisplay();
+    }
+
+    getSyncStatusSummary(): string {
+        return this.syncStatusMessage;
+    }
+
+    async runManualSync(): Promise<void> {
+        await this.syncManager.manualSyncAll();
+    }
+
+    async openSmartSearchModal(): Promise<void> {
+        await this.searchManager.ensureIndexReady();
+        new SmartSearchModal(this).open();
     }
 
     async activateSharedNotesView() {

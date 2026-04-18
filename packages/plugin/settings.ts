@@ -118,6 +118,48 @@ export class CollaborativeSettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
+            .setName('Sync Frequency')
+            .setDesc('How often note and document sync runs automatically.')
+            .addDropdown(dropdown => dropdown
+                .addOptions({
+                    realtime: this.frequencyLabels.realtime,
+                    hourly: this.frequencyLabels.hourly,
+                    daily: this.frequencyLabels.daily,
+                    weekly: this.frequencyLabels.weekly,
+                    monthly: this.frequencyLabels.monthly,
+                    manual: this.frequencyLabels.manual
+                })
+                .setValue(this.plugin.settings.syncFrequency)
+                .onChange(async (value: any) => {
+                    this.plugin.settings.syncFrequency = value as BackupFrequency;
+                    await this.plugin.saveSettings();
+                    this.plugin.setSyncStatus(this.plugin.settings.syncPaused ? 'paused' : 'idle');
+                }));
+
+        new Setting(containerEl)
+            .setName('Pause Sync')
+            .setDesc('Temporarily stop automatic sync without changing your folder rules.')
+            .addToggle((toggle) => {
+                toggle
+                    .setValue(this.plugin.settings.syncPaused)
+                    .onChange(async (value) => {
+                        this.plugin.settings.syncPaused = value;
+                        await this.plugin.saveSettings();
+                        this.plugin.setSyncStatus(value ? 'paused' : 'idle');
+                    });
+            });
+
+        new Setting(containerEl)
+            .setName('Manual Sync')
+            .setDesc('Run an immediate sync pass for files allowed by your current folder rules.')
+            .addButton((button) => button
+                .setButtonText('Sync Now')
+                .setCta()
+                .onClick(async () => {
+                    await this.plugin.runManualSync();
+                }));
+
+        new Setting(containerEl)
             .setName('Backup Frequency')
             .setDesc('How often full-vault backup runs (limited by your subscription plan).')
             .addDropdown(dropdown => dropdown
@@ -201,6 +243,31 @@ export class CollaborativeSettingsTab extends PluginSettingTab {
                     window.open(this.plugin.getPlanManagementUrl(), '_blank');
                 }));
 
+        containerEl.createEl('h3', { text: 'Smart Search' });
+
+        new Setting(containerEl)
+            .setName('Open Smart Search')
+            .setDesc('Search indexed vault content by text, tag, mention, date, and file type.')
+            .addButton((button) => button
+                .setButtonText('Open Search')
+                .onClick(async () => {
+                    await this.plugin.openSmartSearchModal();
+                }));
+
+        new Setting(containerEl)
+            .setName('Search Index')
+            .setDesc(
+                this.plugin.settings.searchIndexBuiltAt > 0
+                    ? `Indexed ${this.plugin.searchManager.getIndexedFileCount()} files. Last rebuilt ${new Date(this.plugin.settings.searchIndexBuiltAt).toLocaleString()}.`
+                    : 'Search index has not been built yet.'
+            )
+            .addButton((button) => button
+                .setButtonText('Rebuild Index')
+                .onClick(async () => {
+                    await this.plugin.searchManager.rebuildIndex();
+                    await this.display();
+                }));
+
         // --- Auth Status ---
         containerEl.createEl('hr');
 
@@ -208,7 +275,9 @@ export class CollaborativeSettingsTab extends PluginSettingTab {
         if (!this.plugin.settings.token) {
             statusDiv.setText('Status: Signed out');
         } else {
-            statusDiv.setText(`Status: ${this.plugin.collaborationManager.getConnectionStatusSummary()}`);
+            statusDiv.setText(
+                `Status: ${this.plugin.collaborationManager.getConnectionStatusSummary()} | Sync: ${this.plugin.getSyncStatusSummary()}`
+            );
         }
 
 

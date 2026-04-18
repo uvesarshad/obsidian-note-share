@@ -23475,7 +23475,7 @@ __export(main_exports, {
   default: () => CollaborativePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian11 = require("obsidian");
+var import_obsidian14 = require("obsidian");
 
 // settings.ts
 var import_obsidian2 = require("obsidian");
@@ -23657,6 +23657,28 @@ var CollaborativeSettingsTab = class extends import_obsidian2.PluginSettingTab {
       this.plugin.settings.syncExcludedFolders = value2.split("\n").filter((p) => p.trim() !== "");
       await this.plugin.saveSettings();
     }));
+    new import_obsidian2.Setting(containerEl).setName("Sync Frequency").setDesc("How often note and document sync runs automatically.").addDropdown((dropdown) => dropdown.addOptions({
+      realtime: this.frequencyLabels.realtime,
+      hourly: this.frequencyLabels.hourly,
+      daily: this.frequencyLabels.daily,
+      weekly: this.frequencyLabels.weekly,
+      monthly: this.frequencyLabels.monthly,
+      manual: this.frequencyLabels.manual
+    }).setValue(this.plugin.settings.syncFrequency).onChange(async (value2) => {
+      this.plugin.settings.syncFrequency = value2;
+      await this.plugin.saveSettings();
+      this.plugin.setSyncStatus(this.plugin.settings.syncPaused ? "paused" : "idle");
+    }));
+    new import_obsidian2.Setting(containerEl).setName("Pause Sync").setDesc("Temporarily stop automatic sync without changing your folder rules.").addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.syncPaused).onChange(async (value2) => {
+        this.plugin.settings.syncPaused = value2;
+        await this.plugin.saveSettings();
+        this.plugin.setSyncStatus(value2 ? "paused" : "idle");
+      });
+    });
+    new import_obsidian2.Setting(containerEl).setName("Manual Sync").setDesc("Run an immediate sync pass for files allowed by your current folder rules.").addButton((button) => button.setButtonText("Sync Now").setCta().onClick(async () => {
+      await this.plugin.runManualSync();
+    }));
     new import_obsidian2.Setting(containerEl).setName("Backup Frequency").setDesc("How often full-vault backup runs (limited by your subscription plan).").addDropdown((dropdown) => dropdown.addOptions(backupFrequencyOptions).setValue(effectiveBackupFrequency).onChange(async (value2) => {
       this.plugin.settings.backupFrequency = value2;
       await this.plugin.saveSettings();
@@ -23700,12 +23722,24 @@ var CollaborativeSettingsTab = class extends import_obsidian2.PluginSettingTab {
     new import_obsidian2.Setting(containerEl).setName("Manage Plan").setDesc("Upgrade your storage or manage billing.").addButton((button) => button.setButtonText("Manage Subscription").onClick(() => {
       window.open(this.plugin.getPlanManagementUrl(), "_blank");
     }));
+    containerEl.createEl("h3", { text: "Smart Search" });
+    new import_obsidian2.Setting(containerEl).setName("Open Smart Search").setDesc("Search indexed vault content by text, tag, mention, date, and file type.").addButton((button) => button.setButtonText("Open Search").onClick(async () => {
+      await this.plugin.openSmartSearchModal();
+    }));
+    new import_obsidian2.Setting(containerEl).setName("Search Index").setDesc(
+      this.plugin.settings.searchIndexBuiltAt > 0 ? `Indexed ${this.plugin.searchManager.getIndexedFileCount()} files. Last rebuilt ${new Date(this.plugin.settings.searchIndexBuiltAt).toLocaleString()}.` : "Search index has not been built yet."
+    ).addButton((button) => button.setButtonText("Rebuild Index").onClick(async () => {
+      await this.plugin.searchManager.rebuildIndex();
+      await this.display();
+    }));
     containerEl.createEl("hr");
     const statusDiv = containerEl.createDiv({ cls: "setting-item-description" });
     if (!this.plugin.settings.token) {
       statusDiv.setText("Status: Signed out");
     } else {
-      statusDiv.setText(`Status: ${this.plugin.collaborationManager.getConnectionStatusSummary()}`);
+      statusDiv.setText(
+        `Status: ${this.plugin.collaborationManager.getConnectionStatusSummary()} | Sync: ${this.plugin.getSyncStatusSummary()}`
+      );
     }
     if (this.plugin.settings.token) {
       if (this.plugin.settings.user) {
@@ -37350,7 +37384,7 @@ var SyncManager = class {
       return false;
     if (this.activeUploads.has(file.path))
       return false;
-    if (!(options == null ? void 0 : options.ignoreSyncRules) && !this.shouldSyncFile(file)) {
+    if (!(options == null ? void 0 : options.ignoreSyncRules) && !this.shouldSyncFile(file, (options == null ? void 0 : options.manual) === true)) {
       return false;
     }
     const encryptionReady = await this.plugin.ensureEncryptionReady({
@@ -37358,13 +37392,18 @@ var SyncManager = class {
       reason: "Unlock vault encryption to resume sync uploads."
     });
     if (!encryptionReady) {
+      this.plugin.setSyncStatus("locked");
       return false;
     }
     this.activeUploads.add(file.path);
+    this.plugin.setSyncStatus(`syncing ${file.name}`);
     try {
       const content = await this.plugin.app.vault.read(file);
       const fileHash = await this.computeContentHash(content);
       if (!(options == null ? void 0 : options.force) && !this.shouldUploadHash(file.path, fileHash)) {
+        if (this.activeUploads.size === 1) {
+          this.plugin.setSyncStatus("synced");
+        }
         return false;
       }
       console.log(`Uploading ${file.path}...`);
@@ -37383,9 +37422,11 @@ var SyncManager = class {
         lastUploadedHash: fileHash
       });
       console.log(`Uploaded ${file.path}`);
+      this.plugin.setSyncStatus(`synced ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`);
       return true;
     } catch (err) {
       console.error(`Failed to upload file ${file.path}:`, err);
+      this.plugin.setSyncStatus(`error ${file.name}`);
       return false;
     } finally {
       this.activeUploads.delete(file.path);
@@ -37399,9 +37440,11 @@ var SyncManager = class {
       reason: "Unlock vault encryption to decrypt synced files."
     });
     if (!encryptionReady) {
+      this.plugin.setSyncStatus("locked");
       return;
     }
     try {
+      this.plugin.setSyncStatus(`syncing ${path}`);
       const cachedRemoteFile = this.remoteFilesByPath.get(path);
       const response = await (0, import_obsidian3.request)({
         url: `${this.plugin.settings.apiUrl}/api/files/download`,
@@ -37432,9 +37475,11 @@ var SyncManager = class {
           lastUploadedHash: fileHash
         });
         console.log(`Downloaded and decrypted ${path}`);
+        this.plugin.setSyncStatus(`synced ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`);
       }
     } catch (err) {
       console.error(`Failed to download file ${path}:`, err);
+      this.plugin.setSyncStatus(`error ${path}`);
     }
   }
   registerEvents() {
@@ -37462,8 +37507,32 @@ var SyncManager = class {
     }, SCHEDULED_SYNC_SCAN_INTERVAL_MS));
     void this.runScheduledSyncScan();
   }
+  async manualSyncAll() {
+    if (!this.plugin.settings.token) {
+      this.plugin.setSyncStatus("sign in required");
+      return;
+    }
+    if (this.plugin.settings.syncPaused) {
+      this.plugin.setSyncStatus("paused");
+      return;
+    }
+    this.plugin.setSyncStatus("syncing vault");
+    let uploadedAny = false;
+    for (const file of this.plugin.app.vault.getFiles()) {
+      if (!this.shouldSyncFile(file, true)) {
+        continue;
+      }
+      const uploaded = await this.uploadFile(file, { manual: true });
+      uploadedAny = uploadedAny || uploaded;
+    }
+    this.plugin.setSyncStatus(uploadedAny ? `synced ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}` : "synced");
+  }
   async runScheduledSyncScan() {
-    const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.backupFrequency);
+    if (this.plugin.settings.syncPaused) {
+      this.plugin.setSyncStatus("paused");
+      return;
+    }
+    const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.syncFrequency);
     if (frequencyWindow === null || frequencyWindow === 0) {
       return;
     }
@@ -37504,9 +37573,12 @@ var SyncManager = class {
     }
     return this.remoteFilesByPath.get(file.path) || null;
   }
-  shouldSyncFile(file) {
+  shouldSyncFile(file, manual = false) {
     const settings = this.plugin.settings;
-    if (settings.backupFrequency === "manual") {
+    if (settings.syncPaused) {
+      return false;
+    }
+    if (!manual && settings.syncFrequency === "manual") {
       return false;
     }
     if (settings.syncFolders.length > 0) {
@@ -37525,7 +37597,7 @@ var SyncManager = class {
     if (currentState.lastUploadedHash === fileHash) {
       return false;
     }
-    const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.backupFrequency);
+    const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.syncFrequency);
     if (frequencyWindow === null || frequencyWindow === 0) {
       return true;
     }
@@ -38401,6 +38473,489 @@ IMPORTANT: Save this phrase securely. You will need it to recover your encrypted
   }
 };
 
+// search.ts
+var import_obsidian11 = require("obsidian");
+var SUPPORTED_TEXT_EXTENSIONS = /* @__PURE__ */ new Set([
+  "md",
+  "markdown",
+  "txt",
+  "json",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "css",
+  "scss",
+  "html",
+  "xml",
+  "yml",
+  "yaml",
+  "csv",
+  "sql",
+  "log"
+]);
+var MAX_INDEXED_FILE_BYTES = 1024 * 1024;
+var SearchManager = class {
+  constructor(plugin) {
+    this.rebuilding = false;
+    this.plugin = plugin;
+  }
+  registerEvents() {
+    this.plugin.registerEvent(
+      this.plugin.app.vault.on("create", async (file) => {
+        if (file instanceof import_obsidian11.TFile) {
+          await this.indexFile(file);
+        }
+      })
+    );
+    this.plugin.registerEvent(
+      this.plugin.app.vault.on("modify", async (file) => {
+        if (file instanceof import_obsidian11.TFile) {
+          await this.indexFile(file);
+        }
+      })
+    );
+    this.plugin.registerEvent(
+      this.plugin.app.vault.on("rename", async (file, oldPath) => {
+        this.removeEntry(oldPath);
+        if (file instanceof import_obsidian11.TFile) {
+          await this.indexFile(file);
+        }
+      })
+    );
+    this.plugin.registerEvent(
+      this.plugin.app.vault.on("delete", async (file) => {
+        this.removeEntry(file.path);
+        await this.plugin.saveSettings();
+      })
+    );
+  }
+  async ensureIndexReady() {
+    if (this.getIndexEntries().length > 0) {
+      return;
+    }
+    await this.rebuildIndex(false);
+  }
+  async rebuildIndex(notify = true) {
+    if (this.rebuilding) {
+      if (notify) {
+        new import_obsidian11.Notice("Search index rebuild is already running.");
+      }
+      return;
+    }
+    this.rebuilding = true;
+    const notice = notify ? new import_obsidian11.Notice("Rebuilding smart search index...", 0) : null;
+    try {
+      const nextIndex = {};
+      let indexedCount = 0;
+      for (const file of this.plugin.app.vault.getFiles()) {
+        const entry = await this.buildEntry(file);
+        if (!entry) {
+          continue;
+        }
+        nextIndex[file.path] = entry;
+        indexedCount += 1;
+      }
+      this.plugin.settings.searchIndex = nextIndex;
+      this.plugin.settings.searchIndexBuiltAt = Date.now();
+      await this.plugin.saveSettings();
+      notice == null ? void 0 : notice.hide();
+      if (notify) {
+        new import_obsidian11.Notice(`Smart search indexed ${indexedCount} files.`);
+      }
+    } catch (error) {
+      console.error("Failed to rebuild smart search index", error);
+      notice == null ? void 0 : notice.hide();
+      if (notify) {
+        new import_obsidian11.Notice("Failed to rebuild smart search index.");
+      }
+    } finally {
+      this.rebuilding = false;
+    }
+  }
+  async indexFile(file) {
+    const entry = await this.buildEntry(file);
+    if (!entry) {
+      if (this.removeEntry(file.path)) {
+        await this.plugin.saveSettings();
+      }
+      return;
+    }
+    this.plugin.settings.searchIndex[file.path] = entry;
+    this.plugin.settings.searchIndexBuiltAt = Date.now();
+    await this.plugin.saveSettings();
+  }
+  search(query) {
+    const trimmedQuery = query.query.trim();
+    const normalizedTag = query.tag.trim().replace(/^#/, "").toLowerCase();
+    const normalizedMention = query.mention.trim().replace(/^@/, "").toLowerCase();
+    const normalizedFileType = query.fileType.trim().replace(/^\./, "").toLowerCase();
+    const queryTerms = trimmedQuery.length > 0 ? trimmedQuery.split(/\s+/).filter(Boolean) : [];
+    const startTime = query.startDate ? Date.parse(`${query.startDate}T00:00:00`) : null;
+    const endTime = query.endDate ? Date.parse(`${query.endDate}T23:59:59`) : null;
+    const results = this.getIndexEntries().filter((entry) => {
+      if (normalizedTag.length > 0 && !entry.tags.some((tag) => tag.toLowerCase() === normalizedTag)) {
+        return false;
+      }
+      if (normalizedMention.length > 0 && !entry.mentions.some((mention) => mention.toLowerCase() === normalizedMention)) {
+        return false;
+      }
+      if (normalizedFileType.length > 0 && entry.extension.toLowerCase() !== normalizedFileType) {
+        return false;
+      }
+      if (startTime !== null && entry.mtime < startTime) {
+        return false;
+      }
+      if (endTime !== null && entry.mtime > endTime) {
+        return false;
+      }
+      if (queryTerms.length === 0) {
+        return true;
+      }
+      const haystack = this.buildSearchableText(entry, query.caseSensitive);
+      return queryTerms.every((term) => haystack.includes(query.caseSensitive ? term : term.toLowerCase()));
+    }).map((entry) => {
+      const score = this.scoreEntry(entry, queryTerms, query.caseSensitive);
+      return {
+        entry,
+        snippet: this.buildSnippet(entry, trimmedQuery, query.caseSensitive),
+        score
+      };
+    }).sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return right.entry.mtime - left.entry.mtime;
+    });
+    return results;
+  }
+  getIndexedFileCount() {
+    return this.getIndexEntries().length;
+  }
+  getIndexEntries() {
+    return Object.values(this.plugin.settings.searchIndex || {});
+  }
+  removeEntry(path) {
+    if (!this.plugin.settings.searchIndex[path]) {
+      return false;
+    }
+    delete this.plugin.settings.searchIndex[path];
+    this.plugin.settings.searchIndexBuiltAt = Date.now();
+    return true;
+  }
+  async buildEntry(file) {
+    if (!this.shouldIndexFile(file)) {
+      return null;
+    }
+    try {
+      const content = await this.plugin.app.vault.cachedRead(file);
+      const tags = this.extractMatches(content, /(^|\s)#([A-Za-z0-9/_-]+)/g);
+      const mentions = this.extractMatches(content, /(^|\s)@([A-Za-z0-9/_-]+)/g);
+      return {
+        path: file.path,
+        title: file.basename,
+        extension: file.extension || "",
+        mtime: file.stat.mtime,
+        tags,
+        mentions,
+        content
+      };
+    } catch (error) {
+      console.error(`Failed to index ${file.path}`, error);
+      return null;
+    }
+  }
+  shouldIndexFile(file) {
+    if (file.stat.size > MAX_INDEXED_FILE_BYTES) {
+      return false;
+    }
+    const extension = (file.extension || "").toLowerCase();
+    return SUPPORTED_TEXT_EXTENSIONS.has(extension);
+  }
+  extractMatches(content, pattern) {
+    const matches = /* @__PURE__ */ new Set();
+    let result = null;
+    while ((result = pattern.exec(content)) !== null) {
+      matches.add(result[2]);
+    }
+    return [...matches];
+  }
+  buildSearchableText(entry, caseSensitive) {
+    const source = [
+      entry.title,
+      entry.path,
+      entry.extension,
+      entry.tags.join(" "),
+      entry.mentions.join(" "),
+      entry.content
+    ].join("\n");
+    return caseSensitive ? source : source.toLowerCase();
+  }
+  scoreEntry(entry, queryTerms, caseSensitive) {
+    if (queryTerms.length === 0) {
+      return 0;
+    }
+    const title = caseSensitive ? entry.title : entry.title.toLowerCase();
+    const path = caseSensitive ? entry.path : entry.path.toLowerCase();
+    const content = caseSensitive ? entry.content : entry.content.toLowerCase();
+    const tags = entry.tags.map((tag) => caseSensitive ? tag : tag.toLowerCase());
+    const mentions = entry.mentions.map((mention) => caseSensitive ? mention : mention.toLowerCase());
+    let score = 0;
+    for (const rawTerm of queryTerms) {
+      const term = caseSensitive ? rawTerm : rawTerm.toLowerCase();
+      if (title.includes(term)) {
+        score += 6;
+      }
+      if (path.includes(term)) {
+        score += 4;
+      }
+      if (tags.some((tag) => tag.includes(term))) {
+        score += 3;
+      }
+      if (mentions.some((mention) => mention.includes(term))) {
+        score += 3;
+      }
+      if (content.includes(term)) {
+        score += 2;
+      }
+    }
+    return score;
+  }
+  buildSnippet(entry, query, caseSensitive) {
+    const source = entry.content.replace(/\s+/g, " ").trim();
+    if (source.length === 0) {
+      return "";
+    }
+    const trimmedQuery = query.trim();
+    if (trimmedQuery.length === 0) {
+      return source.slice(0, 180);
+    }
+    const haystack = caseSensitive ? source : source.toLowerCase();
+    const needle = caseSensitive ? trimmedQuery : trimmedQuery.toLowerCase();
+    const index = haystack.indexOf(needle);
+    if (index === -1) {
+      return source.slice(0, 180);
+    }
+    const start = Math.max(0, index - 60);
+    const end = Math.min(source.length, index + trimmedQuery.length + 120);
+    const prefix = start > 0 ? "..." : "";
+    const suffix = end < source.length ? "..." : "";
+    return `${prefix}${source.slice(start, end)}${suffix}`;
+  }
+};
+
+// SmartSearchModal.ts
+var import_obsidian12 = require("obsidian");
+var EMPTY_QUERY = {
+  query: "",
+  tag: "",
+  mention: "",
+  fileType: "",
+  startDate: "",
+  endDate: "",
+  caseSensitive: false
+};
+var SmartSearchModal = class _SmartSearchModal extends import_obsidian12.Modal {
+  constructor(plugin) {
+    super(plugin.app);
+    this.query = { ...EMPTY_QUERY };
+    this.resultsEl = null;
+    this.statsEl = null;
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("collaborative-smart-search-modal");
+    contentEl.createEl("h2", { text: "Smart Search" });
+    contentEl.createEl("p", {
+      text: "Search indexed vault content with full-text, tag, mention, date, file-type, and case-sensitive filters."
+    });
+    const formEl = contentEl.createDiv({ cls: "collaborative-smart-search-controls" });
+    this.createTextInput(formEl, "Search", "Search text", "query");
+    this.createTextInput(formEl, "Tag", "#tag", "tag");
+    this.createTextInput(formEl, "Mention", "@person", "mention");
+    this.createTextInput(formEl, "File Type", "md", "fileType");
+    this.createDateInput(formEl, "Start Date", "startDate");
+    this.createDateInput(formEl, "End Date", "endDate");
+    this.createCheckbox(formEl, "Case sensitive", "caseSensitive");
+    const actionRow = contentEl.createDiv({ cls: "collaborative-smart-search-actions" });
+    const rebuildButton = actionRow.createEl("button", { text: "Rebuild Index" });
+    rebuildButton.addEventListener("click", async () => {
+      await this.plugin.searchManager.rebuildIndex();
+      this.renderResults();
+    });
+    const clearButton = actionRow.createEl("button", { text: "Clear Filters" });
+    clearButton.addEventListener("click", () => {
+      this.query = { ...EMPTY_QUERY };
+      this.close();
+      new _SmartSearchModal(this.plugin).open();
+    });
+    this.statsEl = contentEl.createDiv({ cls: "setting-item-description" });
+    this.resultsEl = contentEl.createDiv({ cls: "collaborative-smart-search-results" });
+    this.renderResults();
+  }
+  createTextInput(container, label, placeholder, key) {
+    const row = container.createDiv({ cls: "collaborative-smart-search-row" });
+    row.createEl("label", { text: label });
+    const input = row.createEl("input", { type: "text" });
+    input.placeholder = placeholder;
+    input.value = this.query[key];
+    input.addEventListener("input", () => {
+      this.query[key] = input.value;
+      this.renderResults();
+    });
+  }
+  createDateInput(container, label, key) {
+    const row = container.createDiv({ cls: "collaborative-smart-search-row" });
+    row.createEl("label", { text: label });
+    const input = row.createEl("input", { type: "date" });
+    input.value = this.query[key];
+    input.addEventListener("input", () => {
+      this.query[key] = input.value;
+      this.renderResults();
+    });
+  }
+  createCheckbox(container, label, key) {
+    const row = container.createDiv({ cls: "collaborative-smart-search-row" });
+    const labelEl = row.createEl("label", { text: label });
+    const input = labelEl.createEl("input", { type: "checkbox" });
+    input.checked = this.query[key];
+    input.addEventListener("change", () => {
+      this.query[key] = input.checked;
+      this.renderResults();
+    });
+  }
+  renderResults() {
+    if (!this.resultsEl || !this.statsEl) {
+      return;
+    }
+    this.resultsEl.empty();
+    const results = this.plugin.searchManager.search(this.query);
+    this.statsEl.setText(
+      `Indexed files: ${this.plugin.searchManager.getIndexedFileCount()} | Results: ${results.length}`
+    );
+    if (results.length === 0) {
+      this.resultsEl.createEl("p", { text: "No matching notes found." });
+      return;
+    }
+    results.slice(0, 100).forEach((result) => {
+      this.renderResult(result);
+    });
+  }
+  renderResult(result) {
+    if (!this.resultsEl) {
+      return;
+    }
+    const card = this.resultsEl.createDiv({
+      cls: "collaborative-smart-search-result",
+      attr: {
+        style: "padding: 10px 0; border-top: 1px solid var(--background-modifier-border); cursor: pointer;"
+      }
+    });
+    card.createEl("div", { text: result.entry.title, cls: "nav-file-title" });
+    card.createEl("div", {
+      text: `${result.entry.path} | ${result.entry.extension || "file"} | ${new Date(result.entry.mtime).toLocaleString()}`,
+      attr: {
+        style: "font-size: 0.8em; color: var(--text-muted);"
+      }
+    });
+    if (result.entry.tags.length > 0 || result.entry.mentions.length > 0) {
+      card.createEl("div", {
+        text: [
+          result.entry.tags.length > 0 ? `Tags: ${result.entry.tags.map((tag) => `#${tag}`).join(", ")}` : "",
+          result.entry.mentions.length > 0 ? `Mentions: ${result.entry.mentions.map((mention) => `@${mention}`).join(", ")}` : ""
+        ].filter(Boolean).join(" | "),
+        attr: {
+          style: "font-size: 0.8em; color: var(--text-muted); margin-top: 4px;"
+        }
+      });
+    }
+    card.createEl("div", {
+      text: result.snippet || "(No preview available)",
+      attr: {
+        style: "margin-top: 6px; white-space: normal;"
+      }
+    });
+    card.addEventListener("click", async () => {
+      const file = this.plugin.app.vault.getAbstractFileByPath(result.entry.path);
+      if (!(file instanceof import_obsidian12.TFile)) {
+        new import_obsidian12.Notice(`File ${result.entry.path} is no longer available.`);
+        return;
+      }
+      await this.plugin.app.workspace.getLeaf().openFile(file);
+      this.close();
+    });
+  }
+};
+
+// ShareAccessModal.ts
+var import_obsidian13 = require("obsidian");
+var ShareAccessModal = class extends import_obsidian13.Modal {
+  constructor(app, options) {
+    super(app);
+    this.resolver = null;
+    this.resolved = false;
+    this.options = options;
+    this.permissionType = options.currentPermissionType || "private";
+  }
+  openAndWait() {
+    return new Promise((resolve) => {
+      this.resolver = resolve;
+      this.open();
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: "Share & Access Control" });
+    contentEl.createEl("p", {
+      text: this.options.fileCount === 1 ? `Target: ${this.options.targetLabel}` : `Target: ${this.options.targetLabel} | Files: ${this.options.fileCount}`
+    });
+    if (this.options.currentPermissionType || this.options.currentRole) {
+      contentEl.createEl("p", {
+        text: `Current access: ${this.options.currentRole || "unknown"} (${this.options.currentPermissionType || "private"})`,
+        attr: { style: "color: var(--text-muted);" }
+      });
+    }
+    new import_obsidian13.Setting(contentEl).setName("Permission").setDesc("Choose the default access level to apply.").addDropdown((dropdown) => {
+      dropdown.addOptions({
+        private: "Private Invite",
+        public_view: "Public View",
+        public_edit: "Public Edit"
+      }).setValue(this.permissionType).onChange((value2) => {
+        this.permissionType = value2;
+      });
+    });
+    new import_obsidian13.Setting(contentEl).addButton((button) => {
+      button.setButtonText("Apply").setCta().onClick(() => {
+        this.resolve(this.permissionType);
+        this.close();
+      });
+    }).addButton((button) => {
+      button.setButtonText("Cancel").onClick(() => {
+        this.resolve(null);
+        this.close();
+      });
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
+    if (!this.resolved) {
+      this.resolve(null);
+    }
+  }
+  resolve(value2) {
+    var _a;
+    if (this.resolved) {
+      return;
+    }
+    this.resolved = true;
+    (_a = this.resolver) == null ? void 0 : _a.call(this, value2);
+    this.resolver = null;
+  }
+};
+
 // main.ts
 var DEFAULT_SETTINGS = {
   apiUrl: "http://localhost:3008",
@@ -38409,6 +38964,8 @@ var DEFAULT_SETTINGS = {
   syncFolders: [],
   // Empty means all
   syncExcludedFolders: [],
+  syncFrequency: "realtime",
+  syncPaused: false,
   backupFrequency: "realtime",
   fullVaultBackupEnabled: false,
   backupAllowedFrequencies: ["manual", "daily"],
@@ -38418,16 +38975,19 @@ var DEFAULT_SETTINGS = {
   encryptionUserId: "",
   encryptionVerifier: null,
   syncStateUserId: "",
-  syncState: {}
+  syncState: {},
+  searchIndexBuiltAt: 0,
+  searchIndex: {}
 };
 var ENCRYPTION_VERIFIER_TEXT = "obsidian-collaborative-key-check";
 var LEGACY_PLAN_MANAGEMENT_URL = "https://obsidian-collaborative.com/account/plans";
-var CollaborativePlugin = class extends import_obsidian11.Plugin {
+var CollaborativePlugin = class extends import_obsidian14.Plugin {
   constructor() {
     super(...arguments);
     this.sharedFileIndex = /* @__PURE__ */ new Map();
     this.encryptionPromptPromise = null;
     this.encryptionLockedNoticeShown = false;
+    this.syncStatusMessage = "idle";
   }
   async onload() {
     var _a;
@@ -38437,8 +38997,11 @@ var CollaborativePlugin = class extends import_obsidian11.Plugin {
     this.syncManager = new SyncManager(this, this.encryptionService);
     this.backupService = new BackupService(this, this.encryptionService);
     this.sharingService = new SharingService(this);
+    this.searchManager = new SearchManager(this);
     this.shareStatusEl = this.addStatusBarItem();
+    this.syncStatusEl = this.addStatusBarItem();
     this.shareStatusEl.setText("Share: sign in");
+    this.syncStatusEl.setText(`Sync: ${this.settings.syncPaused ? "paused" : "idle"}`);
     this.registerView(
       VIEW_TYPE_SHARED_NOTES,
       (leaf) => new SharedNotesView(leaf, this)
@@ -38452,6 +39015,9 @@ var CollaborativePlugin = class extends import_obsidian11.Plugin {
     });
     this.addRibbonIcon("history", "Version History", () => {
       this.activateVersionHistoryView();
+    });
+    this.addRibbonIcon("search", "Smart Search", () => {
+      void this.openSmartSearchModal();
     });
     this.settingsTab = new CollaborativeSettingsTab(this.app, this);
     this.addSettingTab(this.settingsTab);
@@ -38481,8 +39047,40 @@ var CollaborativePlugin = class extends import_obsidian11.Plugin {
         this.activateVersionHistoryView();
       }
     });
+    this.addCommand({
+      id: "open-smart-search",
+      name: "Open Smart Search",
+      callback: () => {
+        void this.openSmartSearchModal();
+      }
+    });
+    this.addCommand({
+      id: "rebuild-smart-search-index",
+      name: "Rebuild Smart Search Index",
+      callback: () => {
+        void this.searchManager.rebuildIndex();
+      }
+    });
+    this.addCommand({
+      id: "manual-sync-now",
+      name: "Sync Vault Now",
+      callback: () => {
+        void this.runManualSync();
+      }
+    });
+    this.addCommand({
+      id: "toggle-sync-pause",
+      name: "Pause Or Resume Sync",
+      callback: async () => {
+        this.settings.syncPaused = !this.settings.syncPaused;
+        await this.saveSettings();
+        this.setSyncStatus(this.settings.syncPaused ? "paused" : "idle");
+        this.refreshSettingsDisplay();
+      }
+    });
     this.registerEditorExtension(this.collaborationManager.getExtension());
     this.syncManager.registerEvents();
+    this.searchManager.registerEvents();
     this.registerFileMenuActions();
     this.registerEvent(this.app.workspace.on("file-open", async (file) => {
       if (file) {
@@ -38501,6 +39099,7 @@ var CollaborativePlugin = class extends import_obsidian11.Plugin {
       await this.refreshSharedFileIndex();
     }
     await this.updateShareStatusIndicator((_a = this.app.workspace.getActiveFile()) == null ? void 0 : _a.path);
+    void this.searchManager.ensureIndexReady();
     if (this.settings.token) {
       await this.ensureEncryptionReady({
         interactive: true,
@@ -38520,26 +39119,23 @@ var CollaborativePlugin = class extends import_obsidian11.Plugin {
   async openShareAccessControl(target) {
     var _a;
     if (!this.settings.token) {
-      new import_obsidian11.Notice("Please login first to share files.");
+      new import_obsidian14.Notice("Please login first to share files.");
       return;
     }
     const targetFiles = this.getShareTargetFiles(target);
     if (targetFiles.length === 0) {
-      new import_obsidian11.Notice("No files found to share in this selection.");
+      new import_obsidian14.Notice("No files found to share in this selection.");
       return;
     }
-    const targetLabel = target instanceof import_obsidian11.TFolder ? `${target.path} (${targetFiles.length} files)` : target.path;
-    const input = window.prompt(
-      `Set permission for ${targetLabel}
-Use one of: private, public_view, public_edit`,
-      "private"
-    );
-    if (!input) {
-      return;
-    }
-    const permissionType = input.trim().toLowerCase();
-    if (!["private", "public_view", "public_edit"].includes(permissionType)) {
-      new import_obsidian11.Notice("Invalid permission type. Expected private, public_view, or public_edit.");
+    const targetLabel = target instanceof import_obsidian14.TFolder ? `${target.path} (${targetFiles.length} files)` : target.path;
+    const existingShareState = target instanceof import_obsidian14.TFile ? this.sharedFileIndex.get(target.path) : void 0;
+    const permissionType = await new ShareAccessModal(this.app, {
+      targetLabel,
+      fileCount: targetFiles.length,
+      currentPermissionType: existingShareState == null ? void 0 : existingShareState.permissionType,
+      currentRole: existingShareState == null ? void 0 : existingShareState.role
+    }).openAndWait();
+    if (!permissionType) {
       return;
     }
     const encryptionReady = await this.ensureEncryptionReady({
@@ -38583,21 +39179,21 @@ Use one of: private, public_view, public_edit`,
       await this.refreshSharedFileIndex();
       await this.updateShareStatusIndicator((_a = this.app.workspace.getActiveFile()) == null ? void 0 : _a.path);
       if (successCount === 0) {
-        new import_obsidian11.Notice(`Share failed for ${target.name}.`);
+        new import_obsidian14.Notice(`Share failed for ${target.name}.`);
         return;
       }
       if (targetFiles.length === 1 && lastResult) {
-        new import_obsidian11.Notice(
+        new import_obsidian14.Notice(
           `Shared ${targetFiles[0].name} as ${lastResult.role} (${lastResult.permissionType}).`
         );
         return;
       }
-      new import_obsidian11.Notice(
+      new import_obsidian14.Notice(
         failedPaths.length > 0 ? `Shared ${successCount} of ${targetFiles.length} files from ${target.name}.` : `Shared ${successCount} files from ${target.name}.`
       );
     } catch (error) {
       console.error(error);
-      new import_obsidian11.Notice(`Share failed: ${error.message || "Unknown error"}`);
+      new import_obsidian14.Notice(`Share failed: ${error.message || "Unknown error"}`);
     }
   }
   async refreshSharedFileIndex() {
@@ -38683,7 +39279,7 @@ Use one of: private, public_view, public_edit`,
     }
     if (!options.interactive) {
       if (!this.encryptionLockedNoticeShown) {
-        new import_obsidian11.Notice(options.reason);
+        new import_obsidian14.Notice(options.reason);
         this.encryptionLockedNoticeShown = true;
       }
       return false;
@@ -38719,7 +39315,7 @@ Use one of: private, public_view, public_edit`,
         );
         if (verifier !== ENCRYPTION_VERIFIER_TEXT) {
           this.lockEncryption();
-          new import_obsidian11.Notice("Incorrect vault passphrase.");
+          new import_obsidian14.Notice("Incorrect vault passphrase.");
           return false;
         }
       } else {
@@ -38733,15 +39329,15 @@ Use one of: private, public_view, public_edit`,
     } catch (error) {
       console.error("Failed to unlock encryption", error);
       this.lockEncryption();
-      new import_obsidian11.Notice("Incorrect vault passphrase.");
+      new import_obsidian14.Notice("Incorrect vault passphrase.");
       return false;
     }
   }
   getShareTargetFiles(target) {
-    if (target instanceof import_obsidian11.TFile) {
+    if (target instanceof import_obsidian14.TFile) {
       return [target];
     }
-    if (target instanceof import_obsidian11.TFolder) {
+    if (target instanceof import_obsidian14.TFolder) {
       const prefix = target.path.length > 0 ? `${target.path}/` : "";
       return this.app.vault.getFiles().filter((file) => file.path.startsWith(prefix));
     }
@@ -38768,6 +39364,23 @@ Use one of: private, public_view, public_edit`,
     if ((_b = (_a = this.settingsTab) == null ? void 0 : _a.containerEl) == null ? void 0 : _b.isConnected) {
       void this.settingsTab.display();
     }
+  }
+  setSyncStatus(message) {
+    this.syncStatusMessage = message;
+    if (this.syncStatusEl) {
+      this.syncStatusEl.setText(`Sync: ${message}`);
+    }
+    this.refreshSettingsDisplay();
+  }
+  getSyncStatusSummary() {
+    return this.syncStatusMessage;
+  }
+  async runManualSync() {
+    await this.syncManager.manualSyncAll();
+  }
+  async openSmartSearchModal() {
+    await this.searchManager.ensureIndexReady();
+    new SmartSearchModal(this).open();
   }
   async activateSharedNotesView() {
     const { workspace } = this.app;

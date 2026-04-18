@@ -20,10 +20,11 @@ export class SyncManager {
     async uploadFile(file: TFile, options?: {
         force?: boolean;
         ignoreSyncRules?: boolean;
+        manual?: boolean;
     }): Promise<boolean> {
         if (!this.plugin.settings.token) return false;
         if (this.activeUploads.has(file.path)) return false;
-        if (!options?.ignoreSyncRules && !this.shouldSyncFile(file)) {
+        if (!options?.ignoreSyncRules && !this.shouldSyncFile(file, options?.manual === true)) {
             return false;
         }
 
@@ -32,16 +33,21 @@ export class SyncManager {
             reason: 'Unlock vault encryption to resume sync uploads.'
         });
         if (!encryptionReady) {
+            this.plugin.setSyncStatus('locked');
             return false;
         }
 
         this.activeUploads.add(file.path);
+        this.plugin.setSyncStatus(`syncing ${file.name}`);
 
         try {
             const content = await this.plugin.app.vault.read(file);
             const fileHash = await this.computeContentHash(content);
 
             if (!options?.force && !this.shouldUploadHash(file.path, fileHash)) {
+                if (this.activeUploads.size === 1) {
+                    this.plugin.setSyncStatus('synced');
+                }
                 return false;
             }
 
@@ -63,9 +69,11 @@ export class SyncManager {
             });
 
             console.log(`Uploaded ${file.path}`);
+            this.plugin.setSyncStatus(`synced ${new Date().toLocaleTimeString()}`);
             return true;
         } catch (err) {
             console.error(`Failed to upload file ${file.path}:`, err);
+            this.plugin.setSyncStatus(`error ${file.name}`);
             return false;
         } finally {
             this.activeUploads.delete(file.path);
@@ -79,10 +87,12 @@ export class SyncManager {
             reason: 'Unlock vault encryption to decrypt synced files.'
         });
         if (!encryptionReady) {
+            this.plugin.setSyncStatus('locked');
             return;
         }
 
         try {
+            this.plugin.setSyncStatus(`syncing ${path}`);
             const cachedRemoteFile = this.remoteFilesByPath.get(path);
             const response = await request({
                 url: `${this.plugin.settings.apiUrl}/api/files/download`,
@@ -117,9 +127,11 @@ export class SyncManager {
                 });
 
                 console.log(`Downloaded and decrypted ${path}`);
+                this.plugin.setSyncStatus(`synced ${new Date().toLocaleTimeString()}`);
             }
         } catch (err) {
             console.error(`Failed to download file ${path}:`, err);
+            this.plugin.setSyncStatus(`error ${path}`);
         }
     }
 
@@ -153,8 +165,39 @@ export class SyncManager {
         void this.runScheduledSyncScan();
     }
 
+    async manualSyncAll(): Promise<void> {
+        if (!this.plugin.settings.token) {
+            this.plugin.setSyncStatus('sign in required');
+            return;
+        }
+
+        if (this.plugin.settings.syncPaused) {
+            this.plugin.setSyncStatus('paused');
+            return;
+        }
+
+        this.plugin.setSyncStatus('syncing vault');
+        let uploadedAny = false;
+
+        for (const file of this.plugin.app.vault.getFiles()) {
+            if (!this.shouldSyncFile(file, true)) {
+                continue;
+            }
+
+            const uploaded = await this.uploadFile(file, { manual: true });
+            uploadedAny = uploadedAny || uploaded;
+        }
+
+        this.plugin.setSyncStatus(uploadedAny ? `synced ${new Date().toLocaleTimeString()}` : 'synced');
+    }
+
     private async runScheduledSyncScan(): Promise<void> {
-        const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.backupFrequency);
+        if (this.plugin.settings.syncPaused) {
+            this.plugin.setSyncStatus('paused');
+            return;
+        }
+
+        const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.syncFrequency);
         if (frequencyWindow === null || frequencyWindow === 0) {
             return;
         }
@@ -208,10 +251,14 @@ export class SyncManager {
         return this.remoteFilesByPath.get(file.path) || null;
     }
 
-    private shouldSyncFile(file: TFile): boolean {
+    private shouldSyncFile(file: TFile, manual = false): boolean {
         const settings = this.plugin.settings;
 
-        if (settings.backupFrequency === 'manual') {
+        if (settings.syncPaused) {
+            return false;
+        }
+
+        if (!manual && settings.syncFrequency === 'manual') {
             return false;
         }
 
@@ -235,7 +282,7 @@ export class SyncManager {
             return false;
         }
 
-        const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.backupFrequency);
+        const frequencyWindow = this.getFrequencyWindowMs(this.plugin.settings.syncFrequency);
         if (frequencyWindow === null || frequencyWindow === 0) {
             return true;
         }
